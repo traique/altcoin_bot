@@ -28,7 +28,7 @@ jobs:
           python-version: "3.13"
 
       - name: Cài thư viện
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt     # = requirements.txt + thư viện riêng cho kiểm thử
 
       - name: Bộ kiểm thử offline
         env:

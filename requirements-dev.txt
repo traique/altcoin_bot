@@ -1,0 +1,4 @@
+# Chỉ cho bộ kiểm thử (GitHub Actions, máy dev). Botkeep / Render chỉ cài requirements.txt – file này không vào gói.
+-r requirements.txt
+# TestClient của fastapi/starlette (test_flow.py gọi thử các trang web) cần gói này từ starlette 1.x
+httpx2

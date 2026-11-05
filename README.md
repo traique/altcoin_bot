@@ -265,6 +265,7 @@ test_news.py      – tin tức (RSS/Atom, nhận diện coin, từ điển, s�
 test_flow.py      – luồng chính với sàn giả: quét → tin tức → luật chặn → vào lệnh → đóng vì tin xấu → tổng kết, web
 test_gates_protect.py – cổng lọc học được, tín hiệu suýt qua cổng, nới/siết cổng, lớp bảo vệ
 test_strategy.py, test_risk.py, test_learner.py, test_web.py – bộ lọc, rủi ro, tự học, giao diện
+requirements-dev.txt – thư viện để chạy bộ kiểm thử (`pip install -r requirements-dev.txt`), không cần trên Botkeep
 botkeep.env       – các biến cần khai trên panel Botkeep (chỉ bí mật + thông tin riêng)
 check_db.py       – kiểm tra kết nối Supabase trước khi deploy
 ```
