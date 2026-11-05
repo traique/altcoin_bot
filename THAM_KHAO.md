@@ -81,10 +81,15 @@ Chưa có repo trưởng thành nào cho "bandit chọn trigger" hay nhận di�
 5. **Tự học chặt hơn**: kiểm soát nhiều phép thử Benjamini–Hochberg (ý tưởng từ jsharpe/GeneTrader), học trọng số tin bằng kiểm định Welch, vẫn giữ ≥ 30 mẫu, t ≥ 2, 48h/lần đổi.
 6. **Đóng lệnh theo tin mới** chỉ dựa trên giờ bot *biết* tin (tương tự cách lưu "giờ thu thập" của binance/ai-trading-prototype-backtester).
 
-## 6. Có thể làm tiếp (chưa làm)
+## 6. Đã làm trong v4.1
 
-- Bảo vệ kiểu freqtrade: khoá **một phía** sau N lần SL liên tiếp trong X giờ; khoá riêng cặp vừa lỗ (`LowProfitPairs`); lọc coin niêm yết < 10 ngày theo `listTime`.
+- **Lớp bảo vệ kiểu freqtrade** (`bot/protections.py`): khoá **một phía** sau 3 lệnh thua/12h hoặc khi ≥ 80% tín hiệu cùng phía chạm SL trước +1R (StoplossGuard theo phía), coin vừa thua nghỉ 6h / thua 2 lần nghỉ 24h (CooldownPeriod/LowProfitPairs), bỏ coin niêm yết < 10 ngày theo `listTime` (AgeFilter).
+- **Tự chỉnh ngưỡng cổng lọc**: theo dõi bóng tín hiệu trượt đúng 1 cổng sát ngưỡng (tương tự `--rejected-signals` của freqtrade) để bộ tự học nới/siết từng cổng.
+- **Tối ưu walk-forward trên nến lịch sử** (`tools/walkforward.py`, ý tưởng từ freqtrade hyperopt / GeneTrader): chỉ tin bộ tham số thắng ở đoạn dữ liệu chưa dùng để chọn nó. Kết quả chạy 90 ngày: xem `tools/wf_results/`.
+
+## 7. Có thể làm tiếp (chưa làm)
+
 - Đọc `upcChg`/`expTime` của OKX để biết trước hợp đồng sắp gỡ (đã loại khỏi danh sách quét; chưa dùng để đóng lệnh đang mở).
 - Hiệu chỉnh từ điển và half-life offline bằng [cryptoNewsDataset](https://github.com/soheilrahsaz/cryptoNewsDataset) (event study lợi nhuận 1h/4h/24h sau tin).
-- Bootstrap p-value kiểu Jesse (xử lý tự tương quan của tín hiệu chồng thời gian), walk-forward trước khi áp dụng thay đổi.
+- Bootstrap p-value kiểu Jesse (xử lý tự tương quan của tín hiệu chồng thời gian).
 - Trọng số trigger theo multiplicative weights / Thompson sampling có chiết khấu thay cho bước ±0,2 hiện tại.

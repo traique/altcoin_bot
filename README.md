@@ -28,6 +28,12 @@ Bot giao dịch hợp đồng tương lai (USDT-SWAP) altcoin trên OKX, đánh 
 
 **Bước 5 – Luật chặn**: danh mục luật cố định (phiên giờ, BTC, OI, đám đông, funding, tin tức, Fear & Greed). Một số chặn sẵn, còn lại để bộ tự học bật/tắt theo kết quả thật. Tín hiệu bị chặn vẫn được theo dõi "bóng" để bộ tự học biết luật đó có đáng giữ không.
 
+**Bước 5b – Lớp bảo vệ (v4.1, kiểu freqtrade)** – phản ứng trong vài giờ, không phải chờ bộ tự học đủ mẫu:
+- **Khoá một phía** 6h khi 3 lệnh thật cùng phía đóng lỗ trong 12h, *hoặc* ≥ 10 coin có tín hiệu cùng phía trong 12h mà ≥ 80% chạm SL (−1R) trước khi lời +1R. Đo "rào nào chạm trước" chứ không đo kết quả cuối – vì lệnh thua chạm SL nhanh còn lệnh thắng bám sóng tới 24h mới xong, nhìn "kết quả vừa có" lúc nào cũng thấy toàn thua.
+- **Khoá coin**: coin vừa đóng lỗ nghỉ 6h; thua 2 lần trong 24h nghỉ tới hết 24h.
+- **Tuổi niêm yết**: bỏ hợp đồng niêm yết chưa đủ 10 ngày.
+- Tín hiệu bị khoá vẫn được theo dõi bóng (nguồn "Lớp bảo vệ") → báo cáo ngày cho biết bảo vệ đang cứu hay đang làm mất lãi. Khoá đang hiệu lực hiện ở `/status` và trang chủ.
+
 **Bước 6 – Quyết định & vào lệnh (không AI)**: ứng viên qua hết các bước trên được xếp theo điểm; bot vào **ứng viên tốt nhất** (sàn / ngân sách rủi ro từ chối thì thử #2, #3 – `ENTRY_CANDIDATES`), tối đa 1 lệnh mới mỗi lượt quét. SL theo cấu trúc (đáy/đỉnh 6 nến ± 0.15 ATR, tối thiểu 2 ATR; xa hơn 3 ATR thì bỏ). Khối lượng để chạm SL mất `RISK_PER_TRADE` = **3% vốn × hệ số tin tức × chuỗi thua** (đã gồm phí + trượt giá): tin cùng chiều mạnh → tối đa ×1.25 (×1.5 nếu bộ tự học tăng trọng số tin), tin ngược chiều → giảm tương ứng, từ lệnh thua liên tiếp thứ 3 nhân 0.7; kẹp 0.35–1.5×. Điểm kỹ thuật **không** làm tăng rủi ro (dữ liệu v3.2: điểm cao thua nặng nhất). x10 isolated, tối đa 2 lệnh, tổng rủi ro đang mở ≤ `MAX_TOTAL_RISK` = 5% vốn.
 
 **Bước 7 – Quản lý lệnh**: hybrid (chốt 50% ở TP1 do bộ tự học chọn, phần còn lại bám sóng) hoặc cách khác bộ tự học chọn (mục 9). **Lệnh đang mở gặp tin MỚI bất lợi** (long: hack/exploit, huỷ niêm yết; short: niêm yết sàn lớn – `NEWS_EXIT_EVENTS`) → đóng ngay và báo Telegram/Zoom.
@@ -133,6 +139,7 @@ python run.py
 - `DEFAULT_BLOCKS`: luật chặn sẵn. Nếu panel còn `DEFAULT_BLOCKS` của bản cũ, 3 luật tin tức chặn sẵn của v4.0 sẽ mất – hãy xoá biến đó trên panel.
 - `RISK_PER_TRADE`, `LEVERAGE`: hạ nếu thấy chuỗi thua dài. Bot đã tự co rủi ro sau chuỗi thua (`LOSS_STREAK_CUT`) và theo tin tức (`RISK_MIN_MULT`–`RISK_MAX_MULT`); `MAX_TOTAL_RISK` là trần cho mọi lệnh đang mở.
 - `CRYPTO_ONLY=false` chỉ khi muốn quét cả hợp đồng cổ phiếu/hàng hoá token hoá (không khuyên).
+- Lớp bảo vệ: `PROTECT_ENABLED=false` để tắt; nới/siết bằng `PROTECT_SIDE_LOSSES`, `PROTECT_SHADOW_SL_SHARE`, `PROTECT_LOCK_HOURS`, `PROTECT_PAIR_LOSS_HOURS`, `PROTECT_MIN_AGE_DAYS`.
 - Phiên bản đang chạy hiện ở góc tiêu đề dashboard, `/health`, lệnh `status` và tin nhắn khởi động. Nếu Render và Botkeep chạy khác bản, nhãn phiên bản chuyển màu đỏ.
 
 
@@ -152,7 +159,8 @@ python run.py
    - trọng số từng trigger (0,6 – 1,4);
    - ngưỡng điểm MIN_SCORE (4,0 – 7,0, mỗi lần ±0,5);
    - **trọng số tin tức** (0 – 2, mỗi lần ±0,25) – v4.0, so tin cùng chiều vs ngược chiều bằng kiểm định Welch.
-   v4.0: mỗi giờ bot thử ~30 nhóm luật + trigger cùng lúc → thêm **kiểm soát tỉ lệ phát hiện sai Benjamini–Hochberg** (`LEARN_FDR_Q` = 0,10): một nhóm "đạt" t ≥ 2 do may rủi giữa nhiều nhóm sẽ không được đổi tham số.
+   - **ngưỡng 10 cổng lọc** (v4.1): ADX 15m, ATR%, volume, cách EMA21, nhịp 1h ngược, BTC ngược, RSI sàn/trần, vị trí đóng nến, SL cấu trúc. Bot theo dõi bóng cả tín hiệu **trượt đúng 1 cổng, sát ngưỡng** (vd ADX 16–20 khi ngưỡng 20) – trước đây tín hiệu bị loại ở cổng không được ghi nên bộ tự học "mù" với các ngưỡng quan trọng nhất. Nhóm suýt qua có lãi rõ → nới cổng 1 bước; nhóm đã qua nhưng sát ngưỡng lỗ rõ → siết 1 bước (mỗi cổng có giới hạn thấp/cao, 48h/lần).
+   v4.0: mỗi giờ bot thử ~30 nhóm luật + trigger + cổng cùng lúc → **kiểm soát tỉ lệ phát hiện sai Benjamini–Hochberg** (`LEARN_FDR_Q` = 0,10): một nhóm "đạt" t ≥ 2 do may rủi giữa nhiều nhóm sẽ không được đổi tham số.
    Mỗi tham số chỉ đổi tối đa 1 lần/48h (`LEARN_COOLDOWN_H`). v3.2: `LEARN_MIN_T` = 2,0; không bao giờ chặn cả một phía (long_side/short_side chỉ để thống kê); cách thoát lệnh cần ≥ `LEARN_EXIT_MIN_SAMPLES` = 60 cặp. Luật đã chặn vẫn được theo dõi bóng, nên nếu nhóm đó tốt lên bot sẽ tự bỏ chặn. (v3.1: trước đây 13–20 mẫu đã đổi, trọng số trigger nhảy qua lại trong 1 ngày – nay không còn.)
 3. Mỗi sáng (7h) bot gửi **báo cáo tự học** bằng số liệu (không AI): kết quả 24h, nhóm tốt/xấu nhất đủ mẫu, tác động tin tức, cách thoát tốt nhất, đề xuất chờ duyệt.
 4. Chạy ảo: tự áp dụng. Chạy thật: chỉ đề xuất, anh duyệt trên web hoặc gõ `/apply` trên Telegram. Nút "Khôi phục mặc định" đưa mọi thứ về ban đầu.
@@ -228,6 +236,8 @@ bot/indicators.py – EMA/RSI/ATR/MACD/BB/ADX/VWAP
 bot/strategy.py   – cổng bắt buộc + trigger + chấm điểm (kỹ thuật + dòng tiền + tin tức) + luật chặn + quyết định
 bot/news.py       – tin tức không AI: RSS, thông báo OKX/Binance, Fear & Greed, từ điển, sự kiện, điểm theo coin
 bot/review.py     – tổng kết lệnh theo số liệu (thay AI tổng kết)
+bot/protections.py – lớp bảo vệ: khoá phía, khoá coin, tuổi niêm yết, rào ±1R chạm trước
+tools/walkforward.py – tối ưu walk-forward trên nến lịch sử OKX (chạy trên máy tính, không chạy trên Botkeep)
 bot/risk.py       – khối lượng lệnh, cầu dao
 bot/engine.py     – PaperEngine & LiveEngine
 bot/storage.py    – SQLite (1 máy) hoặc Postgres dùng chung (nhiều máy) + khoá leader
@@ -241,6 +251,7 @@ test_smoke.py     – quét thật OKX, in tín hiệu (không cần key)
 test_engine.py    – kiểm tra toán PnL paper
 test_news.py      – tin tức (RSS/Atom, nhận diện coin, từ điển, sự kiện, tổng hợp, đóng lệnh theo tin), tổng kết lệnh
 test_flow.py      – luồng chính với sàn giả: quét → tin tức → luật chặn → vào lệnh → đóng vì tin xấu → tổng kết, web
+test_gates_protect.py – cổng lọc học được, tín hiệu suýt qua cổng, nới/siết cổng, lớp bảo vệ
 test_strategy.py, test_risk.py, test_learner.py, test_web.py – bộ lọc, rủi ro, tự học, giao diện
 botkeep.env       – các biến cần khai trên panel Botkeep (chỉ bí mật + thông tin riêng)
 check_db.py       – kiểm tra kết nối Supabase trước khi deploy

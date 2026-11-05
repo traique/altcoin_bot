@@ -24,6 +24,7 @@ from .dashboard import start_dashboard
 from .learner import Learner
 from .news import NewsHub, EVENT_NAMES
 from .review import review_trade
+from .protections import Protections
 from . import eventlog
 from . import market as mkt
 from . import news as newsmod
@@ -37,7 +38,8 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 SRC_SHORT = {"taken": "✅ vào lệnh", "unfilled": "⛔ sàn/ngân sách từ chối", "not_taken": "xếp sau",
-             "blocked": "🚫 luật chặn", "below_score": "suýt đạt",
+             "blocked": "🚫 luật chặn", "below_score": "suýt đạt", "gate_near": "suýt qua cổng",
+             "protected": "🛡️ lớp bảo vệ",
              # dữ liệu trước v4.0
              "ai_rejected": "AI từ chối (cũ)", "ai_weak": "AI chưa chắc (cũ)", "ai_override": "vượt AI (cũ)",
              "ai_error": "AI lỗi (cũ)", "not_sent": "không gửi AI (cũ)"}
@@ -75,6 +77,7 @@ class Bot:
         self.engine = engine_cls(self.okx, self.store, self.notify.send)
         self.engine.on_close = self._on_trade_closed
         self.learner = Learner(self.store, self.okx, self.notify.send)
+        self.protect = Protections(self.store, self.notify.send)
         self.shadow_seen = {}   # (symbol, side) -> ts: tránh ghi trùng tín hiệu bóng
         self.last_btc = {}
         self.last_market = {}
@@ -134,6 +137,11 @@ class Bot:
         if ls:
             lines.append(f"Quét cuối {dt.datetime.fromtimestamp(ls['ts']).strftime('%H:%M')}: {ls['scanned']} coin, {ls['passed']} đạt | "
                          + ", ".join(f"{k} {v}" for k, v in list(ls['reasons'].items())[:4]))
+        pr = self.protect.public() if getattr(self, "protect", None) else {}
+        for side, lk in (pr.get("sides") or {}).items():
+            lines.append(f"🛡️ Khoá {side.upper()} đến {dt.datetime.fromtimestamp(lk['until']).strftime('%H:%M')}: {lk['why']}")
+        if pr.get("pairs"):
+            lines.append("🛡️ Coin đang nghỉ: " + ", ".join(f"{s.split('/')[0]} ({v['why']})" for s, v in pr["pairs"].items()))
         for t in opens:
             p = self.last_prices.get(t["symbol"])
             upnl = self.engine._pnl(t["side"], t["entry"], p, t["notional"])[0] if p else 0
@@ -275,6 +283,7 @@ class Bot:
             "stats": self.store.stats(), "curve": self.store.equity_curve(),
             "open": opens, "trades": self.store.trades(100), "signals": self.store.recent_signals(40),
             "news": self.news.public() if self.news else {"enabled": False},
+            "protect": self.protect.public() if getattr(self, "protect", None) else {"enabled": False},
             "reviews": self.store.reviews(30), "tz": cfg.TIMEZONE, "ts": time.time(),
             "last_scan": self.last_scan_summary,
             "learn": self.learner.public_state() if self.learner else None,
@@ -338,13 +347,23 @@ class Bot:
         log.info("Quét %d coin... %s%s", len(coins), mkt.describe(btc),
                  (" | " + newsmod.describe(market)) if self.news and self.news.enabled else "")
         candidates, reasons, near = [], Counter(), []
+        side_locks = self.protect.refresh()                 # v4.1: lớp bảo vệ (khoá phía / coin)
+        pair_locks = self.protect.pair_locks()
         for sym, vol, chg in coins:
             if sym in open_syms or self.cooldown.get(sym, 0) > time.time():
                 continue
             try:
+                if self.protect.too_new(self.okx.market(sym)):
+                    reasons["mới niêm yết"] += 1
+                    continue
                 ltf = self.okx.ohlcv(sym, cfg.TIMEFRAME, 220)
                 htf = self.okx.ohlcv(sym, cfg.HTF_TIMEFRAME, 120)
                 sig, why, info = diagnose(sym, ltf, htf, funding=0.0, change24h=float(chg or 0), market=market)
+                if sig is not None and why.startswith(strat.NEAR_PREFIX):
+                    # v4.1: trượt đúng 1 cổng, sát ngưỡng → theo dõi bóng để bộ tự học biết có nên nới cổng
+                    self._shadow(sig, "gate_near")
+                    reasons[why[len(strat.NEAR_PREFIX):].split("(")[0].strip()] += 1
+                    continue
                 if sig is not None and (not why or why.startswith("điểm thấp")):
                     # qua cổng + có trigger → cộng điểm dòng tiền + tin tức TRƯỚC khi xét ngưỡng & xếp hạng
                     why = self._add_context(sig, sym)
@@ -356,6 +375,13 @@ class Bot:
                         reasons["luật chặn"] += 1
                         log.info("%s %s bị luật chặn: %s", sym, sig.side, blk)
                         self._shadow(sig, "blocked")
+                        continue
+                    pblk = self.protect.blocks(sig, side_locks, pair_locks)
+                    if pblk:
+                        sig.rejected = f"lớp bảo vệ: {pblk}"
+                        reasons["lớp bảo vệ"] += 1
+                        log.info("%s %s bị lớp bảo vệ chặn: %s", sym, sig.side, pblk)
+                        self._shadow(sig, "protected")
                         continue
                     candidates.append(sig)
                 else:

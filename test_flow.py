@@ -64,6 +64,8 @@ b.__dict__.update(started_at=time.time(), booting=False, store=st, switches=Swit
                   start_equity=10.0, notify=NS(send=msgs.append), tg=NS(enabled=False), zoom=None)
 b.news = NewsHub(st)
 b.news.set_universe(b.okx.crypto_bases())
+from bot.protections import Protections
+b.protect = Protections(st, msgs.append)
 now = time.time()
 b.news.ingest([
     # AAA: nhiều tin tốt → +điểm, đẩy 5.2 lên trên ngưỡng 5.0 và vượt BBB/CCC khi xếp hạng

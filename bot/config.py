@@ -209,6 +209,18 @@ class Config:
     # long: delist, hack | short: listing. Để trống để tắt.
     NEWS_EXIT_EVENTS = [x.strip() for x in os.getenv("NEWS_EXIT_EVENTS", "delist,hack,listing").split(",") if x.strip()]
 
+    # ---- Lớp bảo vệ (v4.1, kiểu freqtrade – xem protections.py) ----
+    PROTECT_ENABLED = _b("PROTECT_ENABLED", "true")
+    PROTECT_SIDE_LOSSES = _i("PROTECT_SIDE_LOSSES", 3)         # ≥ 3 lệnh thật cùng phía đóng lỗ …
+    PROTECT_SIDE_HOURS = _f("PROTECT_SIDE_HOURS", 12)          # … trong 12h → khoá phía đó
+    PROTECT_SHADOW_MIN = _i("PROTECT_SHADOW_MIN", 10)          # hoặc ≥ 10 coin có tín hiệu cùng phía (kể cả không vào) …
+    PROTECT_SHADOW_SL_SHARE = _f("PROTECT_SHADOW_SL_SHARE", 0.8)   # … mà ≥ 80% chạm SL trước khi lời 1R …
+    PROTECT_SHADOW_HOURS = _f("PROTECT_SHADOW_HOURS", 12)      # … trong 12h gần nhất
+    PROTECT_LOCK_HOURS = _f("PROTECT_LOCK_HOURS", 6)           # thời gian khoá phía
+    PROTECT_PAIR_LOSS_HOURS = _f("PROTECT_PAIR_LOSS_HOURS", 6)     # coin vừa thua → nghỉ 6h
+    PROTECT_PAIR_REPEAT_HOURS = _f("PROTECT_PAIR_REPEAT_HOURS", 24)  # thua 2 lần trong 24h → nghỉ tới hết 24h
+    PROTECT_MIN_AGE_DAYS = _f("PROTECT_MIN_AGE_DAYS", 10)      # bỏ hợp đồng niêm yết chưa đủ 10 ngày
+
     # ---- Tự học ----
     LEARN_MODE = os.getenv("LEARN_MODE", "").strip().lower()  # auto | suggest | off (trống: paper=auto, live=suggest)
     LEARN_MIN_SAMPLES = _i("LEARN_MIN_SAMPLES", 30)           # số tín hiệu tối thiểu trước khi thay đổi gì

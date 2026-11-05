@@ -93,7 +93,9 @@ function render(d){
       <div class="r ${x.upnl>=0?'up':'dn'}">${x.upnl==null?'—':sgn(x.upnl)+f(Math.abs(x.upnl),4)}<small>USDT${x.price&&x.margin?' · '+f(100*x.upnl/x.margin,1)+'% ký quỹ':''}</small></div>
       <div class="m">Vào ${px(x.entry)} · Giá ${px(x.price)} · SL ${px(x.sl)} · ${x.exit_mode==='hybrid'?(x.tp1_done?`đã chốt ${f(100*(1-x.notional/x.notional0),0)}% (${sgn(x.realized)}${f(Math.abs(x.realized),3)}), phần còn lại bám sóng`:`TP1 ${px(x.tp1)} rồi bám sóng`):x.exit_mode==='trail'?'bám sóng (trailing ATR)':`TP ${px(x.tp)}`} · ${f(x.notional,1)} USDT · mở ${agoT(x.opened_at)}</div></div>`).join('')
       :'<div class="empty">Không có lệnh nào đang mở – bot đang chờ tín hiệu đủ điều kiện.</div>');
-    const ls=d.last_scan;put('scan',ls?`<b>Lần quét cuối</b> ${agoT(ls.ts)} · ${ls.scanned} coin · <b class="${ls.passed?'up':''}">${ls.passed} đạt</b>${ls.top&&ls.top.length?' ('+ls.top.map(esc).join(', ')+')':''}<br>Loại vì: ${Object.entries(ls.reasons||{}).map(([k,v])=>`${esc(k)} <b>${v}</b>`).join(' · ')||'—'}${ls.near&&ls.near.length?`<br>Suýt đạt: ${ls.near.map(esc).join(', ')}`:''}`:'Chưa quét lần nào.');
+    const pr=d.protect||{},plk=Object.entries(pr.sides||{}),ppr=Object.entries(pr.pairs||{});
+    const protTxt=(plk.length||ppr.length)?`<br><span class="dn">🛡️ ${plk.map(([s,v])=>`Khoá ${s.toUpperCase()} đến ${t(v.until)} – ${esc(v.why)}`).concat(ppr.map(([s,v])=>`${esc(s.split('/')[0])} nghỉ đến ${t(v.until)} (${esc(v.why)})`)).join(' · ')}</span>`:'';
+    const ls=d.last_scan;put('scan',(ls?`<b>Lần quét cuối</b> ${agoT(ls.ts)} · ${ls.scanned} coin · <b class="${ls.passed?'up':''}">${ls.passed} đạt</b>${ls.top&&ls.top.length?' ('+ls.top.map(esc).join(', ')+')':''}<br>Loại vì: ${Object.entries(ls.reasons||{}).map(([k,v])=>`${esc(k)} <b>${v}</b>`).join(' · ')||'—'}${ls.near&&ls.near.length?`<br>Suýt đạt: ${ls.near.map(esc).join(', ')}`:''}`:'Chưa quét lần nào.')+protTxt);
   }
   renderLog();
 }
@@ -114,7 +116,7 @@ function renderNews(n){
     <div class="m">${esc(h.src)}${h.kind==='ann'?' <span class="pill gold" style="font-size:10px">thông báo sàn</span>':''} · ${t(h.ts)}${(h.coins||[]).length?' · '+h.coins.map(esc).join(', '):''}${(h.events||[]).length?' · <b>'+h.events.map(e=>esc(EV[e]||e)).join(', ')+'</b>':''}</div></div>`).join('')
    :'<div class="empty">Chưa có tin – bot tải tin mỗi vài phút sau khi khởi động.</div>';
 }
-const SRC={taken:'Đã vào lệnh',unfilled:'Sàn/ngân sách từ chối',not_taken:'Xếp sau',blocked:'Luật chặn',below_score:'Suýt đạt',
+const SRC={taken:'Đã vào lệnh',unfilled:'Sàn/ngân sách từ chối',not_taken:'Xếp sau',blocked:'Luật chặn',below_score:'Suýt đạt',gate_near:'Suýt qua cổng',protected:'Lớp bảo vệ',
   ai_override:'(cũ) vượt AI',ai_weak:'(cũ) AI chưa chắc',ai_rejected:'(cũ) AI từ chối',ai_error:'(cũ) AI lỗi',not_sent:'(cũ) không gửi AI'};
 const OUT={TP:'TP',SL:'SL',TIMEOUT:'Hết giờ',PENDING:'Đang theo dõi',NODATA:'Không dữ liệu'};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -147,7 +149,7 @@ function renderLearn(L){
   sub.innerHTML=`${MODE[L.mode]||L.mode} · ${tot} kết quả · ${pend} đang theo dõi`;
   const tech=st.tech||{},ne=st.news_effect||{};
   const pending=(L.log||[]).filter(r=>r.status==='pending');
-  const KIND={block:'Chặn',unblock:'Bỏ chặn',trigger_w:'Trọng số',min_score:'Ngưỡng điểm',exit_mode:'Cách thoát lệnh',tp1_r:'Mức TP1',news_w:'Trọng số tin tức',ai_veto_conf:'(cũ) Ngưỡng phủ quyết AI',migrate:'Nâng cấp',reset:'Khôi phục'};
+  const KIND={block:'Chặn',unblock:'Bỏ chặn',trigger_w:'Trọng số',min_score:'Ngưỡng điểm',exit_mode:'Cách thoát lệnh',tp1_r:'Mức TP1',news_w:'Trọng số tin tức',gate:'Ngưỡng cổng lọc',ai_veto_conf:'(cũ) Ngưỡng phủ quyết AI',migrate:'Nâng cấp',reset:'Khôi phục'};
   let h=`<div class="note">
     ${tot<L.min_samples?`Bot đang thu thập kết quả của mọi tín hiệu (kể cả tín hiệu không vào lệnh). Cần ít nhất <b>${L.min_samples}</b> kết quả cho mỗi nhóm trước khi tự điều chỉnh – hiện có <b>${tot}</b>.<br>`:''}
     Tín hiệu kỹ thuật: <b>${tech.n||0}</b> kết quả · thắng <b>${tech.winrate||0}%</b> · kỳ vọng <b class="${(tech.exp_r||0)>=0?'up':'dn'}">${(tech.exp_r||0)>=0?'+':''}${f(tech.exp_r||0,2)}R</b>/tín hiệu
@@ -157,6 +159,7 @@ function renderLearn(L){
     <span class="pill gold">Ngưỡng điểm ${p.min_score}${p.min_score!=p.min_score_default?` (mặc định ${p.min_score_default})`:''}</span>
     <span class="pill gold">Thoát: ${(L.exit_names||{})[(st.exit_compare||{}).current||p.exit_mode||'hybrid']||'—'}</span>
     <span class="pill gold">Trọng số tin ×${p.news_w}${p.news_w!=p.news_w_default?` (mặc định ${p.news_w_default})`:''}</span>
+    ${Object.entries(p.gates||{}).filter(([k,g])=>g.thr!==g.default).map(([k,g])=>`<span class="pill gold">${esc(g.name)}: ${g.thr} (mặc định ${g.default})</span>`).join('')}
     ${(p.blocks||[]).map(k=>`<span class="pill" style="color:var(--dn)">Chặn: ${esc(L.rules[k]||k)}</span>`).join('')}
     ${Object.entries(p.trigger_w||{}).map(([k,v])=>`<span class="pill">${esc(L.trigger_names[k]||k)} ×${v}</span>`).join('')}
   </div>`;
@@ -177,6 +180,7 @@ function renderLearn(L){
   h+=`<details><summary>Kết quả theo nguồn tín hiệu</summary>${statRows(st.by_source,'Nguồn')||'<div class="empty">Chưa có dữ liệu</div>'}</details>
   <details><summary>Theo luật lọc (ứng viên để chặn)</summary>${statRows(st.by_rule,'Luật')||'<div class="empty">Chưa có dữ liệu</div>'}</details>
   <details><summary>Theo trigger</summary>${statRows(st.by_trigger,'Trigger')||'<div class="empty">Chưa có dữ liệu</div>'}</details>
+  <details><summary>Cổng lọc – tín hiệu suýt qua vs đã qua sát ngưỡng</summary>${Object.keys(st.by_gate||{}).length?`<table class="mini"><tr><th>Cổng (ngưỡng)</th><th>Suýt qua – bị loại</th><th>Qua sát ngưỡng</th></tr>${Object.entries(st.by_gate).map(([k,g])=>{const c=a=>a.n?`<span class="${a.exp_r>0?'up':a.exp_r<0?'dn':''}">${a.exp_r>=0?'+':''}${f(a.exp_r,2)}R</span> · ${a.n} mẫu`:'—';return `<tr><td>${esc(g.name)} <span class="pill" style="font-size:10px">${g.thr}${g.thr!==g.default?' ← '+g.default:''}</span></td><td>${c(g.out)}</td><td>${c(g.in)}</td></tr>`}).join('')}</table><div class="note small muted" style="padding-top:8px">Suýt qua có lãi rõ → bot nới cổng 1 bước; qua sát ngưỡng lỗ rõ → siết 1 bước (≥ ${L.min_samples} mẫu, t ≥ 2, lọc FDR, 48h/lần).</div>`:'<div class="empty">Chưa có dữ liệu – bot bắt đầu theo dõi tín hiệu suýt qua cổng từ v4.1.</div>'}</details>
   <details><summary>Theo tin tức · Fear &amp; Greed</summary>${statRows(st.by_news,'Tin tức')||''}${statRows(st.by_fng,'Fear & Greed')||''}${!(Object.keys(st.by_news||{}).length||Object.keys(st.by_fng||{}).length)?'<div class="empty">Chưa có dữ liệu</div>':''}</details>
   <details><summary>Theo hướng · khung giờ · điểm</summary>${statRows(st.by_side,'Hướng')}${statRows(st.by_session,'Khung giờ')}${statRows(st.by_score,'Điểm')}</details>
   <details><summary>Lịch sử thay đổi (${(L.log||[]).length})</summary>${(L.log||[]).length?`<div class="list">${L.log.map(r=>`<div class="row"><div class="t">${KIND[r.kind]||r.kind} <span class="pill" style="font-size:10px">${{applied:'đã áp dụng',pending:'chờ duyệt',rejected:'đã bỏ qua'}[r.status]||r.status}</span></div><div class="r"><small>${t(r.ts)}</small></div><div class="m">${esc(r.reason)}</div></div>`).join('')}</div>`:'<div class="empty">Chưa có thay đổi nào.</div>'}</details>
@@ -355,6 +359,12 @@ def _settings_body(bot, msg="", ok=True):
         ("Số coin quét", cfg.TOP_N_COINS, None),
         ("Tin tức: làm mới · cửa sổ · half-life", f"{cfg.NEWS_REFRESH_MIN:g} phút · {cfg.NEWS_WINDOW_H:g}h · {cfg.NEWS_HALF_LIFE_H:g}h", None),
         ("Đóng lệnh khi có tin mới", ", ".join(cfg.NEWS_EXIT_EVENTS) or "tắt", None),
+        *[(g[0], f"{float(g[2]()):g}", (L.get("gates") or {}).get(k)) for k, g in strategy.GATES.items()],
+        ("Bảo vệ: khoá phía", f"{cfg.PROTECT_SIDE_LOSSES} lệnh thua/{cfg.PROTECT_SIDE_HOURS:g}h hoặc ≥{cfg.PROTECT_SHADOW_SL_SHARE:.0%} "
+                              f"tín hiệu chạm SL trước (≥{cfg.PROTECT_SHADOW_MIN} coin/{cfg.PROTECT_SHADOW_HOURS:g}h) → "
+                              f"{cfg.PROTECT_LOCK_HOURS:g}h" if cfg.PROTECT_ENABLED else "tắt", None),
+        ("Bảo vệ: coin vừa thua · tuổi niêm yết", f"nghỉ {cfg.PROTECT_PAIR_LOSS_HOURS:g}h (thua 2 lần: "
+                                                  f"{cfg.PROTECT_PAIR_REPEAT_HOURS:g}h) · ≥ {cfg.PROTECT_MIN_AGE_DAYS:g} ngày", None),
         ("Luật đang chặn", ", ".join(sorted(strategy.active_blocks())) or "—", None),
     ]
     prow = [f"<tr><td>{ui.e(n)}</td><td class='num'>{ui.e(str(d))}</td>"

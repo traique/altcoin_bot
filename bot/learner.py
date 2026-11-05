@@ -27,15 +27,18 @@ from collections import defaultdict
 from .config import cfg
 from . import strategy
 from . import exits
+from .protections import first_barrier
 
 log = logging.getLogger("learner")
 
 # Nguồn tín hiệu "kỹ thuật đạt" (dùng để học). Các nguồn ai_* / not_sent là dữ liệu trước v4.0 – vẫn được tính.
-TECH_SOURCES = ("taken", "unfilled", "not_taken", "blocked",
+TECH_SOURCES = ("taken", "unfilled", "not_taken", "blocked", "protected",
                 "ai_weak", "ai_override", "ai_rejected", "ai_error", "not_sent")
 EXIT_NAMES = {"fixed": "TP cố định", "hybrid": "Ăn sóng (chốt 1 phần + bám sóng)", "trail": "Bám sóng toàn bộ"}
 SOURCE_NAMES = {"taken": "Đã vào lệnh", "unfilled": "Đạt nhưng sàn/ngân sách rủi ro không cho vào",
                 "not_taken": "Đạt nhưng xếp sau (không vào)", "blocked": "Bị luật chặn", "below_score": "Suýt đạt (điểm thấp)",
+                "gate_near": "Suýt qua cổng (trượt đúng 1 cổng, sát ngưỡng)",
+                "protected": "Bị lớp bảo vệ chặn (khoá phía / coin)",
                 "ai_weak": "(trước v4) AI đồng ý nhưng chưa chắc", "ai_override": "(trước v4) vào dù AI phản đối yếu",
                 "ai_rejected": "(trước v4) AI từ chối", "ai_error": "(trước v4) AI lỗi / hết lượt",
                 "not_sent": "(trước v4) không gửi AI"}
@@ -216,7 +219,7 @@ class Learner:
 
     # ================================================================ 1. kết quả bóng
     def resolve_pending(self):
-        rows = self.store.pending_signals(60)
+        rows = self.store.pending_signals(150)
         if not rows:
             return 0
         by_sym = defaultdict(list)
@@ -232,6 +235,10 @@ class Learner:
                 log.debug("shadow %s: %s", sym, e)
                 continue
             for it in items:
+                if not it.get("first_hit"):              # v4.1: rào ±1R chạm trước – lớp bảo vệ dùng (biết sớm, không lệch)
+                    hit, hts = first_barrier(it["side"], it["entry"], it["sl"], it["ts"], candles)
+                    if hit:
+                        self.store.set_first_hit(it["sid"], hit, hts)
                 res = self._simulate_all(it, candles, cost_frac)
                 if res:
                     outcome, r, rf, rh, rt, rv = res
@@ -340,6 +347,8 @@ class Learner:
                              "exp_aligned": round(sum(a_vals) / len(a_vals), 3) if a_vals else 0,
                              "exp_against": round(sum(b_vals) / len(b_vals), 3) if b_vals else 0,
                              "diff": round(diff, 3), "t": round(t, 2), "weight": strategy.news_weight()}
+        # v4.1: cổng lọc – tín hiệu "suýt qua cổng" (bị loại) so với tín hiệu đã qua nhưng nằm sát ngưỡng
+        st["by_gate"] = self._gate_stats(rows, tech)
         # So sánh cách thoát lệnh trên cùng tập tín hiệu kỹ thuật
         both = [r for r in tech if r.get("r_fixed") is not None and r.get("r_hybrid") is not None and r.get("r_trail") is not None]
         from .engine import current_exit_mode
@@ -362,6 +371,27 @@ class Learner:
         self.last_stats = st
         self.store.set("learn_stats", st)
         return st, rows, tech
+
+    @staticmethod
+    def _gate_stats(rows, tech):
+        """{cổng: {name, thr, default, kind, out: nhóm suýt qua (bị loại), in: nhóm đã qua nhưng sát ngưỡng}}."""
+        near_rows = [(r, _feat(r)) for r in rows if r["source"] == "gate_near"]
+        trend_rows = [(r, f) for r, f in ((r, _feat(r)) for r in tech) if f.get("setup") != "range"]
+        out = {}
+        for key, (name, kind, dflt, near, step, lo, hi) in strategy.GATES.items():
+            o = [r for r, f in near_rows if f.get("gate_near") == key]
+            i = []
+            for r, f in trend_rows:
+                v = strategy.gate_value(key, r["side"], f)
+                if v is None:
+                    continue
+                thr = strategy.gv(key, r["side"])
+                if (kind == "min" and thr <= v < thr + near) or (kind == "max" and thr - near < v <= thr):
+                    i.append(r)
+            if o or i:
+                out[key] = {"name": name, "kind": kind, "thr": strategy.gv(key), "default": float(dflt()),
+                            "step": step, "out": _agg(o), "in": _agg(i)}
+        return out
 
     @staticmethod
     def _tp1_vals(tech):
@@ -398,6 +428,10 @@ class Learner:
         fam = {f"rule:{k}": _pval(v.get("t", 0)) for k, v in st["by_rule"].items()
                if k not in strategy.NEVER_BLOCK and v["n"] >= N}
         fam.update({f"trig:{k}": _pval(v.get("t", 0)) for k, v in st["by_trigger"].items() if v["n"] >= N})
+        for k, g in (st.get("by_gate") or {}).items():          # v4.1: cổng lọc cùng họ kiểm định
+            for part in ("out", "in"):
+                if g[part]["n"] >= N:
+                    fam[f"gate_{part}:{k}"] = _pval(g[part].get("t", 0))
         discovered = _bh(fam, cfg.LEARN_FDR_Q)
         st["fdr"] = {"q": cfg.LEARN_FDR_Q, "tested": len(fam), "passed": sorted(discovered)}
 
@@ -492,6 +526,25 @@ class Learner:
                                       reason=f"Tin cùng chiều {ne['exp_aligned']:+.2f}R ({ne['n_aligned']} mẫu) vs ngược chiều "
                                              f"{ne['exp_against']:+.2f}R ({ne['n_against']} mẫu), t = {ne['t']}: {why} {cur} → {new}"))
 
+        # g) v4.1 – ngưỡng cổng lọc: tín hiệu SUÝT QUA cổng (bị loại) có lãi rõ → nới 1 bước;
+        #    tín hiệu ĐÃ QUA nhưng sát ngưỡng lỗ rõ → siết 1 bước. Giới hạn trong [thấp nhất, cao nhất] của từng cổng.
+        for key, g in (st.get("by_gate") or {}).items():
+            if self._cool("gate:" + key):
+                continue
+            name, kind, _d, _near, step, lo, hi = strategy.GATES[key]
+            cur = strategy.gv(key)
+            loosen = round(cur - step if kind == "min" else cur + step, 3)
+            tighten = round(cur + step if kind == "min" else cur - step, 3)
+            o, i = g["out"], g["in"]
+            if f"gate_out:{key}" in discovered and _confident(o, 0.1, N) and lo <= loosen <= hi:
+                proposals.append(dict(kind="gate", key=key, old=cur, new=loosen, n=o["n"], exp=o["exp_r"],
+                                      reason=f"Cổng \"{name}\": {o['n']} tín hiệu suýt qua (đang bị loại) có kỳ vọng "
+                                             f"{o['exp_r']:+.2f}R, thắng {o['winrate']}% → nới {cur:g} → {loosen:g}"))
+            elif f"gate_in:{key}" in discovered and _confident(i, -0.2, N) and lo <= tighten <= hi:
+                proposals.append(dict(kind="gate", key=key, old=cur, new=tighten, n=i["n"], exp=i["exp_r"],
+                                      reason=f"Cổng \"{name}\": {i['n']} tín hiệu qua cổng sát ngưỡng có kỳ vọng "
+                                             f"{i['exp_r']:+.2f}R, thắng {i['winrate']}% → siết {cur:g} → {tighten:g}"))
+
         pending = {(r["kind"], r["k"]) for r in self.store.learn_log(200) if r["status"] == "pending"}
         for p in proposals:
             if self.mode == "auto":
@@ -534,6 +587,12 @@ class Learner:
         elif k == "news_w":
             L["news_w"] = max(0.0, min(2.0, float(p["new"])))
             self._touch("news_w")
+        elif k == "gate" and p["key"] in strategy.GATES:
+            _, _, _, _, _, lo, hi = strategy.GATES[p["key"]]
+            G = dict(L.get("gates") or {})
+            G[p["key"]] = max(lo, min(hi, float(p["new"])))
+            L["gates"] = G
+            self._touch("gate:" + p["key"])
         else:                                          # loại cũ (vd ai_veto_conf trong lịch sử chờ duyệt) → bỏ qua
             log.info("Tự học: bỏ qua đề xuất loại '%s' (không còn dùng từ v4.0)", k)
             return
@@ -563,7 +622,7 @@ class Learner:
         old = dict(strategy.LEARNED)
         strategy.LEARNED.clear()
         strategy.LEARNED.update({"min_score": None, "trigger_w": {}, "blocks": [], "unblocked": [], "exit_mode": None,
-                                 "tp1_r": None, "news_w": None, "schema": self.LEARNED_SCHEMA})
+                                 "tp1_r": None, "news_w": None, "gates": {}, "schema": self.LEARNED_SCHEMA})
         self.store.set("learned", strategy.LEARNED)
         self.store.set("learn_last", {})
         self.store.add_learn("reset", "all", old, strategy.LEARNED, "Khôi phục tham số mặc định (thủ công)", 0, 0, "applied")
@@ -598,6 +657,10 @@ class Learner:
             obs.append(f"Nhóm tốt nhất: {best[2]} {best[0]:+.2f}R/tín hiệu ({best[3]} mẫu, t = {best[1]})")
             if worst is not best:
                 obs.append(f"Nhóm tệ nhất: {worst[2]} {worst[0]:+.2f}R/tín hiệu ({worst[3]} mẫu, t = {worst[1]})")
+        pr = (st.get("by_source") or {}).get("protected")
+        if pr and pr.get("n", 0) >= min_n:
+            obs.append(f"Lớp bảo vệ đã chặn {pr['n']} tín hiệu, nếu vào sẽ có kỳ vọng {pr['exp_r']:+.2f}R "
+                       f"({'bảo vệ đang cứu' if pr['exp_r'] < 0 else 'bảo vệ đang làm mất lãi'})")
         ne = st.get("news_effect") or {}
         if ne.get("n_aligned") and ne.get("n_against"):
             obs.append(f"Tin cùng chiều {ne['exp_aligned']:+.2f}R ({ne['n_aligned']}) vs ngược chiều {ne['exp_against']:+.2f}R "
@@ -625,7 +688,9 @@ class Learner:
             "params": {"min_score": L.get("min_score") or cfg.MIN_SCORE, "min_score_default": cfg.MIN_SCORE,
                        "trigger_w": L.get("trigger_w") or {}, "blocks": sorted(strategy.active_blocks()),
                        "exit_mode": L.get("exit_mode"), "tp1_r": exits.current_tp1_r(),
-                       "news_w": strategy.news_weight(), "news_w_default": cfg.NEWS_WEIGHT},
+                       "news_w": strategy.news_weight(), "news_w_default": cfg.NEWS_WEIGHT,
+                       "gates": {k: {"name": v[0], "thr": strategy.gv(k), "default": float(v[2]())}
+                                 for k, v in strategy.GATES.items()}},
             "exit_names": EXIT_NAMES, "exit_configured": cfg.EXIT_MODE,
             "rules": {k: v[0] for k, v in strategy.RULES.items()},
             "trigger_names": strategy.TRIGGER_NAMES,

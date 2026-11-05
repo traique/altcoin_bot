@@ -16,13 +16,19 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "4.0.0"
+VERSION = "4.1.0"
 RELEASED = "2026-11-05"
-RELEASE_BUILD = "2704525"          # ghi bởi `python -m bot.version --stamp`
+RELEASE_BUILD = "e14df4f"          # ghi bởi `python -m bot.version --stamp`
 BUILD = RELEASED                   # tương thích các chỗ cũ dùng BUILD
 
 # Mới nhất ở trên: (phiên bản, ngày, các thay đổi – câu ngắn, đọc tốt trên điện thoại)
 NOTES = (
+    ("4.1.0", "2026-11-05", (
+        "Bộ tự học chỉnh được ngưỡng 10 cổng lọc (ADX, ATR, volume, cách EMA21, nhịp 1h, BTC, RSI, nến, SL): theo dõi bóng cả tín hiệu trượt đúng 1 cổng sát ngưỡng – trước đây tín hiệu bị loại ở cổng không được ghi",
+        "Lớp bảo vệ kiểu freqtrade: khoá 1 phía 6h sau 3 lệnh thua/12h hoặc khi ≥80% tín hiệu cùng phía chạm SL trước khi lời 1R; coin vừa thua nghỉ 6h; bỏ coin niêm yết < 10 ngày",
+        "Tín hiệu bị lớp bảo vệ chặn vẫn được theo dõi bóng → báo cáo ngày cho biết bảo vệ đang cứu hay làm mất lãi",
+        "Công cụ tối ưu walk-forward trên nến lịch sử OKX (tools/walkforward.py) dùng đúng code chấm tín hiệu và thoát lệnh của bot",
+    )),
     ("4.0.0", "2026-11-05", (
         "Bỏ hoàn toàn AI khỏi quyết định mua bán: vào lệnh thuần kỹ thuật + dòng tiền + tin tức, không cần key 9Router/OpenRouter",
         "Tin tức miễn phí, không cần key: 10 trang RSS crypto, thông báo niêm yết/huỷ niêm yết OKX & Binance, Fear & Greed – chấm bằng từ điển + luật sự kiện",

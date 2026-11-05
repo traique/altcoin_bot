@@ -118,7 +118,8 @@ class Store:
         self._add_cols("signals", [("sid", "TEXT"), ("source", "TEXT"), ("entry", real), ("sl", real), ("tp", real),
                                    ("features", "TEXT"), ("outcome", "TEXT"), ("outcome_r", real), ("outcome_ts", real),
                                    ("r_fixed", real), ("r_hybrid", real), ("r_trail", real), ("r_tp1v", "TEXT"),
-                                   ("decision", "TEXT"), ("conf", "INTEGER"), ("reason", "TEXT")])
+                                   ("decision", "TEXT"), ("conf", "INTEGER"), ("reason", "TEXT"),
+                                   ("first_hit", "TEXT"), ("first_ts", real)])     # v4.1: rào ±1R chạm trước
         self._add_cols("trades", [("tp1", real), ("tp1_done", "INTEGER"), ("peak", real), ("peak_ts", real),
                                   ("realized", real), ("atr", real), ("notional0", real), ("exit_mode", "TEXT"),
                                   ("sl0", real), ("risk_mult", real), ("tp1_ts", real), ("conf", "INTEGER"), ("news", real)])
@@ -232,7 +233,8 @@ class Store:
 
     # ---- signals
     def log_signal(self, sig, dec, taken, source="taken"):
-        """source: taken | unfilled (sàn/ngân sách rủi ro không cho vào) | not_taken (xếp sau) | blocked | below_score.
+        """source: taken | unfilled (sàn/ngân sách rủi ro không cho vào) | not_taken (xếp sau) | blocked | below_score
+        | gate_near (v4.1: trượt 1 cổng sát ngưỡng) | protected (v4.1: lớp bảo vệ khoá phía/coin).
         Dữ liệu trước v4.0 còn các nguồn AI cũ: ai_weak, ai_override, ai_rejected, ai_error, not_sent."""
         import uuid
         feats = {k: v for k, v in (sig.context or {}).items() if k != "last_candles"}
@@ -247,6 +249,14 @@ class Store:
             time.time(), sig.symbol, sig.side, sig.score,
             (dec or {}).get("decision"), (dec or {}).get("confidence"), (dec or {}).get("reason"), int(taken),
             uuid.uuid4().hex[:12], source, sig.price, sig.sl, sig.tp, json.dumps(feats, ensure_ascii=False), "PENDING"))
+
+    def set_first_hit(self, sid, hit, ts):
+        self.db.run("UPDATE signals SET first_hit=?, first_ts=? WHERE sid=?", (hit, ts, sid))
+
+    def signals_since(self, ts):
+        """Tín hiệu phát ra từ `ts` (cũ → mới) – lớp bảo vệ dùng để xem rào ±1R của các tín hiệu gần đây."""
+        return self.db.run("SELECT symbol, side, source, ts, first_hit, outcome, outcome_r FROM signals WHERE ts>=? ORDER BY ts",
+                           (ts,), fetch=True)
 
     def pending_signals(self, limit=40):
         return self.db.run("SELECT * FROM signals WHERE outcome='PENDING' AND ts < ? ORDER BY ts LIMIT ?",
