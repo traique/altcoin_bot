@@ -1,0 +1,716 @@
+"""Sinh tín hiệu & quyết định vào lệnh – thuần quy tắc (kỹ thuật + dòng tiền + tin tức), KHÔNG dùng AI.
+
+Nguyên tắc:
+  * Chỉ dùng NẾN ĐÃ ĐÓNG (bỏ nến đang hình thành) → tín hiệu không đổi ý giữa chừng.
+  * Có các CỔNG BẮT BUỘC (gate) – thiếu 1 cổng là loại ngay, không chấm điểm.
+  * Phải có ít nhất 1 TRIGGER rõ ràng (sự kiện vừa xảy ra trong 1–3 nến gần nhất).
+  * Chấm điểm hợp lưu kỹ thuật, cộng/trừ điểm dòng tiền (OI, funding) và tin tức (độ lệch tin của coin × trọng số
+    tin tức mà bộ tự học đo được), rồi áp các LUẬT CHẶN (bộ tự học bật/tắt theo kết quả bóng).
+  * Ứng viên đạt ngưỡng điểm, không bị chặn, RR đủ → vào lệnh (decide()). Không có bước hỏi AI.
+"""
+import logging
+import time
+from dataclasses import dataclass, field, asdict
+from .indicators import to_frame, enrich
+from .config import cfg
+
+log = logging.getLogger("strategy")
+
+# Tham số do bộ tự học (learner.py) cập nhật. Mặc định = không can thiệp.
+LEARNED = {"min_score": None, "trigger_w": {}, "blocks": [], "unblocked": [], "exit_mode": None, "tp1_r": None,
+           "news_w": None}
+
+TRIGGER_KEYS = {"MACD": "macd_cross", "EMA9": "ema_cross", "Breakout": "breakout", "Breakdown": "breakout",
+                "Pullback": "pullback", "Nến nhấn chìm": "engulf", "Đảo chiều tại biên": "range_revert",
+                "Bật tại VWAP": "vwap_bounce", "Gãy tại VWAP": "vwap_bounce"}
+TRIGGER_NAMES = {"macd_cross": "MACD cắt", "ema_cross": "EMA9 cắt EMA21", "breakout": "Breakout/Breakdown 20 nến",
+                 "pullback": "Pullback EMA21", "engulf": "Nến nhấn chìm", "vwap_bounce": "Hồi về VWAP rồi bật",
+                 "range_revert": "Đảo chiều tại biên Bollinger (vùng đi ngang)"}
+
+
+def trig_key(name):
+    for prefix, k in TRIGGER_KEYS.items():
+        if name.startswith(prefix):
+            return k
+    return "other"
+
+
+# Danh mục luật lọc mà bộ tự học ĐƯỢC PHÉP bật/tắt (không tự sinh luật mới)
+RULES = {
+    "setup_range": ("Setup đảo chiều trong vùng đi ngang (range)", lambda side, c: c.get("setup") == "range"),
+    "short_htf_oversold": ("Short khi RSI 1h < 32 (đã quá bán)", lambda side, c: side == "short" and c.get("htf_rsi", 50) < 32),
+    "long_htf_overbought": ("Long khi RSI 1h > 68 (đã quá mua)", lambda side, c: side == "long" and c.get("htf_rsi", 50) > 68),
+    "short_bb_bottom": ("Short sát đáy Bollinger", lambda side, c: side == "short" and c.get("bb_pos", 0.5) < 0.08),
+    "long_bb_top": ("Long sát đỉnh Bollinger", lambda side, c: side == "long" and c.get("bb_pos", 0.5) > 0.92),
+    "chase_24h": ("Đánh theo hướng đã chạy >10% trong 24h",
+                  lambda side, c: (side == "long" and c.get("change24h", 0) > 10) or (side == "short" and c.get("change24h", 0) < -10)),
+    "night_session": ("Vào lệnh 0h–7h sáng (giờ VN, thanh khoản thấp)", lambda side, c: c.get("hour", 12) < 7),
+    "afternoon_session": ("Vào lệnh 13h–19h (giờ VN, phiên chiều Á – hay phá vỡ giả)", lambda side, c: 13 <= c.get("hour", 12) < 19),
+    "weak_adx": ("ADX 15m dưới 25", lambda side, c: c.get("adx", 30) < 25),
+    # v3.2: chỉ để thống kê – bộ tự học KHÔNG được chặn cả một phía (chặn theo regime 2 ngày = tự tắt bot)
+    "long_side": ("Mọi lệnh LONG", lambda side, c: side == "long"),
+    "short_side": ("Mọi lệnh SHORT", lambda side, c: side == "short"),
+    # v3.2: hai luật mới từ 211 tín hiệu bóng (23–27/10/2026)
+    "climax_volume": ("Nến tín hiệu volume cao trào (≥ 1.5× trung bình 20 nến)",
+                      lambda side, c: _v(c, "vol_ratio", 1) >= cfg.CLIMAX_VOL),
+    "late_trend": ("Vào muộn: ADX 1h ≥ 35 (xu hướng đã chạy lâu)",
+                   lambda side, c: _v(c, "htf_adx", 0) >= cfg.LATE_TREND_ADX),
+    # ---- BTC dẫn dắt altcoin
+    "long_btc_down": ("Long altcoin khi BTC 1h đang giảm (>0.5%)",
+                      lambda side, c: side == "long" and _v(c, "btc_chg_1h", 0) < -0.5),
+    "short_btc_up": ("Short altcoin khi BTC 1h đang tăng (>0.5%)",
+                     lambda side, c: side == "short" and _v(c, "btc_chg_1h", 0) > 0.5),
+    "against_btc_trend": ("Ngược xu hướng BTC khung 1h",
+                          lambda side, c: _v(c, "btc_trend_1h", 0) == (-1 if side == "long" else 1)),
+    "btc_volatile": ("BTC biến động mạnh (>1.5% trong 1h)", lambda side, c: abs(_v(c, "btc_chg_1h", 0)) > 1.5),
+    "btc_dump_4h": ("BTC giảm >3% trong 4h", lambda side, c: _v(c, "btc_chg_4h", 0) < -3),
+    # ---- Open Interest: có tiền mới vào hay chỉ là đóng vị thế
+    "long_oi_falling": ("Long khi giá tăng nhưng OI giảm (không có tiền mới)",
+                        lambda side, c: side == "long" and _v(c, "px_chg_1h", 0) > 0 and _v(c, "oi_chg_1h", 0) < -1),
+    "short_oi_falling": ("Short khi giá giảm nhưng OI giảm (không có short mới)",
+                         lambda side, c: side == "short" and _v(c, "px_chg_1h", 0) < 0 and _v(c, "oi_chg_1h", 0) < -1),
+    "oi_spike": ("OI tăng đột biến >8%/1h (đòn bẩy dồn, dễ quét)", lambda side, c: _v(c, "oi_chg_1h", 0) > 8),
+    # ---- Đám đông
+    "crowded_long": ("Long khi tài khoản long/short > 2.5 (đám đông đã long)",
+                     lambda side, c: side == "long" and _v(c, "ls_ratio", 1) > 2.5),
+    "crowded_short": ("Short khi tài khoản long/short < 0.7 (đám đông đã short)",
+                      lambda side, c: side == "short" and _v(c, "ls_ratio", 1) < 0.7),
+    "funding_hot": ("Funding cực đoan cùng chiều lệnh (>0.05%)",
+                    lambda side, c: (side == "long" and _v(c, "funding", 0) > 0.0005) or (side == "short" and _v(c, "funding", 0) < -0.0005)),
+    # ---- v4.0: tin tức (news.py). 3 luật đầu chặn sẵn (DEFAULT_BLOCKS), còn lại để bộ tự học thống kê
+    "news_delist": ("Coin có tin huỷ niêm yết (7 ngày) – mọi hướng", lambda side, c: "delist" in (c.get("news_events") or ())),
+    "news_hack_long": ("Long khi coin vừa có tin hack/exploit (48h)",
+                       lambda side, c: side == "long" and "hack" in (c.get("news_events") or ())),
+    "news_listing_short": ("Short khi coin vừa có tin niêm yết sàn lớn (48h)",
+                           lambda side, c: side == "short" and "listing" in (c.get("news_events") or ())),
+    "news_unlock_long": ("Long khi coin có tin mở khoá token (72h)",
+                         lambda side, c: side == "long" and "unlock" in (c.get("news_events") or ())),
+    "news_against": ("Ngược chiều tin tức của coin (lệch ≥ 0.3)",
+                     lambda side, c: _v(c, "news_n", 0) > 0 and news_align(side, c) <= -0.3),
+    "news_hype": ("Coin đang nóng trên báo (≥ 5 bài/24h)", lambda side, c: _v(c, "news_n", 0) >= 5),
+    "mkt_news_against": ("Ngược tâm lý tin tức toàn thị trường (lệch ≥ 0.25)",
+                         lambda side, c: _v(c, "mkt_news", 0) * (1 if side == "long" else -1) <= -0.25),
+    "fng_greed_long": ("Long khi thị trường tham lam cực độ (Fear & Greed ≥ 75)",
+                       lambda side, c: side == "long" and _v(c, "fng", 50) >= 75),
+    "fng_fear_short": ("Short khi thị trường sợ hãi cực độ (Fear & Greed ≤ 25)",
+                       lambda side, c: side == "short" and _v(c, "fng", 50) <= 25),
+}
+
+
+NEVER_BLOCK = {"long_side", "short_side"}   # v3.2: không bao giờ chặn cả một phía
+
+
+def active_blocks():
+    """Luật đang chặn = bộ tự học chặn + luật chặn sẵn (DEFAULT_BLOCKS) mà bộ tự học chưa gỡ.
+    Tín hiệu bị chặn vẫn được theo dõi bóng → nếu thực tế có lãi, bộ tự học tự gỡ chặn."""
+    learned = set(LEARNED.get("blocks") or []) - NEVER_BLOCK
+    unblocked = set(LEARNED.get("unblocked") or [])
+    return learned | {r for r in cfg.DEFAULT_BLOCKS if r in RULES and r not in unblocked}
+
+
+def blocked_by(sig):
+    """Luật đang chặn tín hiệu này (sau khi đã có đủ dữ liệu BTC/OI). Trả về mô tả hoặc ''."""
+    blocks = active_blocks()
+    for rule in matching_rules(sig.side, sig.context):
+        if rule in blocks:
+            return RULES[rule][0]
+    return ""
+
+
+def _v(c, k, default):
+    v = c.get(k)
+    return default if v is None else v
+
+
+def news_align(side, ctx):
+    """Độ lệch tin tức của coin theo hướng lệnh: dương = tin ủng hộ lệnh, âm = ngược chiều (−1..+1)."""
+    b = _v(ctx or {}, "news_bias", 0.0)
+    return b if side == "long" else -b
+
+
+def news_weight():
+    """Trọng số tin tức đang dùng: bộ tự học chỉnh trong 0–2 (0 = bỏ qua tin), mặc định NEWS_WEIGHT."""
+    v = LEARNED.get("news_w")
+    return float(v) if v is not None else cfg.NEWS_WEIGHT
+
+
+def matching_rules(side, ctx):
+    return [k for k, (_, fn) in RULES.items() if fn(side, ctx)]
+
+
+@dataclass
+class Signal:
+    symbol: str
+    side: str                 # long | short
+    score: float
+    price: float
+    atr: float
+    sl: float
+    tp: float
+    reasons: list = field(default_factory=list)
+    context: dict = field(default_factory=dict)
+    rejected: str = ""        # lý do bị loại (chỉ để log/debug)
+    triggers: list = field(default_factory=list)   # mã trigger: macd_cross, ema_cross, breakout, pullback, engulf
+
+    @property
+    def rr(self):
+        risk = abs(self.price - self.sl)
+        return abs(self.tp - self.price) / risk if risk else 0
+
+    def to_dict(self):
+        d = asdict(self)
+        d["rr"] = round(self.rr, 2)
+        return d
+
+
+MOMENTUM_TRIGGERS = {"macd_cross", "ema_cross"}   # chỉ báo động lượng trễ – tính chung 1 nhóm
+PULLBACK_TRIGGERS = {"pullback", "vwap_bounce"}   # cùng là "hồi về giá trị rồi bật" (EMA21 ≈ VWAP) – tính chung 1 nhóm
+
+
+def _htf_trend(htf):
+    """Xu hướng khung lớn: 1 tăng, -1 giảm, 0 sideway (EMA21/50 + ADX)."""
+    r = htf.row(-1)
+    if r.adx < cfg.HTF_MIN_ADX:
+        return 0
+    if r.ema21 > r.ema50 and r.close > r.ema21:
+        return 1
+    if r.ema21 < r.ema50 and r.close < r.ema21:
+        return -1
+    return 0
+
+
+def _triggers(df, side):
+    """Trả về danh sách trigger vừa xảy ra trong 3 nến đã đóng gần nhất."""
+    r, p = df.row(-1), df.row(-2)
+    n = df.n
+    last3 = range(n - 3, n)
+    out = []
+
+    def crossed(up):
+        for i in last3:
+            h, hp = df.macd_hist[i], df.macd_hist[i - 1]
+            if up and h > 0 and hp <= 0:
+                return True
+            if not up and h < 0 and hp >= 0:
+                return True
+        return False
+
+    def ema_cross(up):
+        for i in last3:
+            a, b = df.ema9[i] - df.ema21[i], df.ema9[i - 1] - df.ema21[i - 1]
+            if up and a > 0 and b <= 0:
+                return True
+            if not up and a < 0 and b >= 0:
+                return True
+        return False
+
+    if side == "long":
+        if crossed(True):
+            out.append("MACD cắt lên")
+        if ema_cross(True):
+            out.append("EMA9 cắt lên EMA21")
+        if r.close > p.hh20 and r.vol_ratio >= cfg.BREAKOUT_VOL:
+            out.append(f"Breakout đỉnh 20 nến, vol x{r.vol_ratio:.1f}")
+        touched = any(df.low[i] <= df.ema21[i] * 1.002 for i in last3)
+        if touched and r.close > r.ema21 and r.close > r.open and r.close_pos >= 0.6:
+            out.append("Pullback EMA21 + nến bật")
+        # v3.1: hồi về VWAP (giá trị trung bình theo volume trong ngày) rồi bật – cấu trúc hay gặp khi EMA21 ở xa
+        touched_v = any(df.low[i] <= df.vwap[i] * 1.002 for i in last3)
+        if touched_v and r.close > r.vwap and r.close > r.open and r.close_pos >= 0.6:
+            out.append("Bật tại VWAP")
+        if p.close < p.open and r.close > p.open and r.open <= p.close * 1.001 and r.vol_ratio >= 1.0:
+            out.append("Nến nhấn chìm tăng")
+    else:
+        if crossed(False):
+            out.append("MACD cắt xuống")
+        if ema_cross(False):
+            out.append("EMA9 cắt xuống EMA21")
+        if r.close < p.ll20 and r.vol_ratio >= cfg.BREAKOUT_VOL:
+            out.append(f"Breakdown đáy 20 nến, vol x{r.vol_ratio:.1f}")
+        touched = any(df.high[i] >= df.ema21[i] * 0.998 for i in last3)
+        if touched and r.close < r.ema21 and r.close < r.open and r.close_pos <= 0.4:
+            out.append("Pullback EMA21 + nến gãy")
+        touched_v = any(df.high[i] >= df.vwap[i] * 0.998 for i in last3)
+        if touched_v and r.close < r.vwap and r.close < r.open and r.close_pos <= 0.4:
+            out.append("Gãy tại VWAP")
+        if p.close > p.open and r.close < p.open and r.open >= p.close * 0.999 and r.vol_ratio >= 1.0:
+            out.append("Nến nhấn chìm giảm")
+    return out
+
+
+# v4.1: các cổng có ngưỡng số mà bộ tự học được phép chỉnh (từng bước nhỏ, trong giới hạn).
+# Giá trị luôn tính THEO HƯỚNG LỆNH (vd chase = mức coin vừa chạy NGƯỢC hướng lệnh trong 1h) để long/short dùng chung ngưỡng.
+# kind "min": loại khi giá trị < ngưỡng | "max": loại khi giá trị > ngưỡng.
+# near: độ rộng vùng "suýt qua" ngoài ngưỡng – tín hiệu chỉ trượt đúng 1 cổng trong vùng này được theo dõi bóng (gate_near),
+# để biết nới cổng có lời không; tín hiệu đã qua cổng nhưng nằm sát ngưỡng (bên trong vùng near) cho biết có nên siết không.
+GATES = {
+    # key: (tên, kind, mặc định, near, bước, thấp nhất, cao nhất)
+    "min_adx": ("ADX 15m tối thiểu", "min", lambda: cfg.MIN_ADX, 4, 2, 14, 30),
+    "min_atr_pct": ("Biến động ATR% tối thiểu", "min", lambda: cfg.MIN_ATR_PCT, 0.1, 0.05, 0.2, 0.6),
+    "min_vol_ratio": ("Volume nến tín hiệu tối thiểu (× TB20)", "min", lambda: cfg.MIN_VOL_RATIO, 0.2, 0.1, 0.4, 1.2),
+    "max_ext_atr": ("Cách EMA21 tối đa (ATR)", "max", lambda: cfg.MAX_EXT_ATR, 0.5, 0.25, 0.5, 2.0),
+    "chase_1h_pct": ("Nhịp 1h ngược hướng lệnh tối đa (%)", "max", lambda: cfg.CHASE_1H_PCT, 0.3, 0.1, 0.2, 1.5),
+    "btc_gate_chg": ("BTC chạy ngược hướng lệnh tối đa (%/1h)", "max", lambda: cfg.BTC_GATE_CHG, 0.3, 0.1, 0.1, 1.0),
+    "rsi_floor": ("RSI tối thiểu theo hướng lệnh", "min", lambda: cfg.RSI_LONG_MIN, 5, 2.5, 35, 55),
+    "rsi_cap": ("RSI tối đa theo hướng lệnh", "max", lambda: cfg.RSI_LONG_MAX, 5, 2.5, 60, 80),
+    "wick_close_pos": ("Vị trí đóng nến tối thiểu theo hướng lệnh", "min", lambda: cfg.WICK_CLOSE_POS, 0.1, 0.05, 0.4, 0.8),
+    "max_sl_atr": ("SL theo cấu trúc tối đa (ATR)", "max", lambda: cfg.MAX_SL_ATR, 0.75, 0.25, 2.0, 4.0),
+}
+
+
+def gv(key, side="long"):
+    """Ngưỡng cổng đang dùng: bộ tự học (LEARNED['gates']) ghi đè mặc định trong config.
+    RSI tính theo hướng lệnh (short: 100 − RSI): mặc định short lấy từ RSI_SHORT_MIN/MAX nếu người dùng đặt lệch."""
+    v = (LEARNED.get("gates") or {}).get(key)
+    if v is not None:
+        return float(v)
+    if side == "short" and key == "rsi_floor":
+        return 100 - cfg.RSI_SHORT_MAX
+    if side == "short" and key == "rsi_cap":
+        return 100 - cfg.RSI_SHORT_MIN
+    return float(GATES[key][2]())
+
+
+def gate_value(key, side, ctx):
+    """Giá trị của 1 cổng theo hướng lệnh, đọc từ context/features của tín hiệu (None nếu thiếu dữ liệu)."""
+    want = 1 if side == "long" else -1
+    c = ctx or {}
+    if key == "min_adx":
+        return c.get("adx")
+    if key == "min_atr_pct":
+        return c.get("atr_pct")
+    if key == "min_vol_ratio":
+        return c.get("vol_ratio")
+    if key == "max_ext_atr":
+        return c.get("ext_atr")
+    if key == "chase_1h_pct":
+        return None if c.get("chg1h") is None else -want * c["chg1h"]
+    if key == "btc_gate_chg":
+        return None if c.get("btc_chg_1h") is None else -want * c["btc_chg_1h"]
+    if key in ("rsi_floor", "rsi_cap"):
+        return None if c.get("rsi") is None else (c["rsi"] if side == "long" else 100 - c["rsi"])
+    if key == "wick_close_pos":
+        return None if c.get("close_pos") is None else (c["close_pos"] if side == "long" else 1 - c["close_pos"])
+    if key == "max_sl_atr":
+        return c.get("sl_atr")
+    return None
+
+
+def gate_near(key, val, thr):
+    """Giá trị đã trượt cổng `key` có nằm trong vùng "suýt qua" không."""
+    _, kind, _, near, _, _, _ = GATES[key]
+    return val >= thr - near if kind == "min" else val <= thr + near
+
+
+def gate_fails(r, side, trend, market=None, chg1h=None):
+    """Kiểm tra TẤT CẢ cổng bắt buộc, theo đúng thứ tự cũ. Trả về danh sách cổng không đạt:
+    [{"key": mã cổng chỉnh được hoặc None, "why": lý do, "val": giá trị theo hướng lệnh, "thr": ngưỡng}].
+    chg1h: % giá đổi trong 4 nến 15m đã đóng gần nhất (nhịp 1h của chính coin)."""
+    want = 1 if side == "long" else -1
+    if trend != want:
+        return [{"key": None, "why": "khung lớn không cùng hướng"}]
+    m = market or {}
+    out = []
+
+    def fail(key, why, val=None, thr=None):
+        out.append({"key": key, "why": why, "val": val, "thr": thr})
+
+    # v3.2: không bắt đỉnh/đáy của nhịp hồi 1h. Short khi coin vừa tăng ≥ CHASE_1H_PCT trong 1h (long: vừa giảm)
+    # → 56 tín hiệu bóng -0.72R, thắng 18%. Pullback hợp lệ là nhịp hồi NHỎ (< 0.5%) rồi gãy, không phải nhịp đảo chiều.
+    t = gv("chase_1h_pct")
+    if chg1h is not None and t > 0 and -want * chg1h >= t:
+        fail("chase_1h_pct", f"ngược nhịp 1h của coin ({chg1h:+.2f}%/1h)", -want * chg1h, t)
+    # Cổng BTC bắt buộc: altcoin đi theo BTC, không đánh ngược xu hướng / động lượng BTC
+    btc_why = "BTC đang xu hướng giảm" if side == "long" else "BTC đang xu hướng tăng"
+    if m.get("btc_trend_1h") == -want:
+        fail(None, btc_why)
+    else:
+        t = gv("btc_gate_chg")
+        bv = -want * (m.get("btc_chg_1h") or 0)
+        if bv > t:
+            fail("btc_gate_chg", btc_why, bv, t)
+    t = gv("min_adx")
+    if r.adx < t:
+        fail("min_adx", f"ADX thấp ({r.adx:.0f} < {t:.0f})", r.adx, t)
+    t = gv("min_atr_pct")
+    if r.atr_pct < t:
+        fail("min_atr_pct", f"biến động thấp ({r.atr_pct:.2f}%)", r.atr_pct, t)
+    t = gv("min_vol_ratio")
+    if r.vol_ratio < t:
+        fail("min_vol_ratio", f"volume yếu (x{r.vol_ratio:.2f})", r.vol_ratio, t)
+    t = gv("max_ext_atr")
+    ext = abs(r.close - r.ema21) / r.atr if r.atr else 0.0
+    if ext > t:
+        fail("max_ext_atr", "giá đã chạy quá xa EMA21 (đuổi giá)", ext, t)
+    rv = r.rsi if side == "long" else 100 - r.rsi
+    lo, hi = gv("rsi_floor", side), gv("rsi_cap", side)
+    if rv < lo:
+        fail("rsi_floor", f"RSI ngoài vùng ({r.rsi:.0f})", rv, lo)
+    elif rv > hi:
+        fail("rsi_cap", f"RSI ngoài vùng ({r.rsi:.0f})", rv, hi)
+    if (side == "long" and r.close < r.open) or (side == "short" and r.close > r.open):
+        fail(None, "nến tín hiệu ngược hướng")
+    cp = r.close_pos if side == "long" else 1 - r.close_pos
+    t = gv("wick_close_pos")
+    if cp < t:
+        fail("wick_close_pos", f"râu trên dài – bị từ chối giá (close_pos {r.close_pos:.2f})" if side == "long"
+             else f"râu dưới dài – bị rút chân (close_pos {r.close_pos:.2f})", cp, t)
+    return out
+
+
+def _gates(r, side, trend, market=None, chg1h=None):
+    """Các điều kiện bắt buộc. Trả về lý do loại ĐẦU TIÊN, hoặc '' nếu qua hết (giữ giao diện cũ)."""
+    f = gate_fails(r, side, trend, market, chg1h)
+    return f[0]["why"] if f else ""
+
+
+def _score(df, htf, side, triggers, funding, change24h):
+    r = df.row(-1)
+    h = htf.row(-1)
+    s, why = 0.0, []
+    tw = LEARNED.get("trigger_w") or {}
+    # MACD cắt & EMA9 cắt cùng là chỉ báo động lượng trễ (tương quan cao) → chỉ tính 1 cái mạnh nhất.
+    # Pullback EMA21 & bật tại VWAP cùng một cấu trúc → cũng chỉ tính 1. Tối đa 2 nhóm trigger được cộng điểm.
+    keys = [trig_key(t) for t in triggers]
+    mom = [tw.get(k, 1.0) for k in keys if k in MOMENTUM_TRIGGERS]
+    pb = [tw.get(k, 1.0) for k in keys if k in PULLBACK_TRIGGERS]
+    struct = [tw.get(k, 1.0) for k in keys if k not in MOMENTUM_TRIGGERS and k not in PULLBACK_TRIGGERS]
+    weights = sorted(([max(mom)] if mom else []) + ([max(pb)] if pb else []) + struct, reverse=True)[:2]
+    s += sum(1.5 * w for w in weights); why += triggers
+    # EMA stack đồng bộ
+    if (side == "long" and r.ema9 > r.ema21 > r.ema50) or (side == "short" and r.ema9 < r.ema21 < r.ema50):
+        s += 1; why.append("EMA 9/21/50 xếp đúng thứ tự")
+    # EMA200 cùng phía
+    if (side == "long" and r.close > r.ema200) or (side == "short" and r.close < r.ema200):
+        s += 0.5; why.append("Đúng phía EMA200")
+    # ADX mạnh
+    if r.adx >= 30:
+        s += 1; why.append(f"ADX {r.adx:.0f} mạnh")
+    elif r.adx >= 25:
+        s += 0.5; why.append(f"ADX {r.adx:.0f}")
+    # Khung lớn: DI đồng thuận
+    if (side == "long" and h.di_plus > h.di_minus) or (side == "short" and h.di_minus > h.di_plus):
+        s += 0.5; why.append("DI khung 1h đồng thuận")
+    # Khung lớn: RSI & MACD cùng hướng
+    if (side == "long" and h.macd_hist > 0 and 50 < h.rsi < 72) or (side == "short" and h.macd_hist < 0 and 28 < h.rsi < 50):
+        s += 1; why.append("MACD+RSI khung 1h đồng thuận")
+    # VWAP
+    if (side == "long" and r.close > r.vwap) or (side == "short" and r.close < r.vwap):
+        s += 0.5; why.append("Đúng phía VWAP")
+    # Volume: v3.2 – volume cao trào trên nến tín hiệu là dấu hiệu cạn lực, KHÔNG cộng điểm mà trừ
+    # (31 tín hiệu bóng vol 1.5–2.5×: -0.68R, thắng 16%)
+    if r.vol_ratio >= cfg.CLIMAX_VOL:
+        s -= 1; why.append(f"Volume cao trào x{r.vol_ratio:.1f} (trừ điểm)")
+    # Xu hướng 1h đã chạy lâu (ADX 1h ≥ 35): v4.2 mặc định KHÔNG trừ điểm (89 ngày: đảo dấu theo giai đoạn) –
+    # luật late_trend để bộ tự học chặn khi cần; LATE_TREND_PENALTY > 0 để trừ như v3.2
+    if cfg.LATE_TREND_PENALTY and h.adx >= cfg.LATE_TREND_ADX:
+        s -= cfg.LATE_TREND_PENALTY; why.append(f"ADX 1h {h.adx:.0f} – xu hướng đã chạy lâu (trừ điểm)")
+    # Nến đóng mạnh
+    if (side == "long" and r.close_pos >= 0.7 and r.body_pct >= 0.5) or (side == "short" and r.close_pos <= 0.3 and r.body_pct >= 0.5):
+        s += 0.5; why.append("Nến đóng dứt khoát")
+    # Funding: ngược đám đông được cộng, cùng đám đông quá nóng bị trừ
+    if side == "long" and funding < -0.0003:
+        s += 0.5; why.append(f"Funding âm {funding*100:.3f}%")
+    if side == "short" and funding > 0.0003:
+        s += 0.5; why.append(f"Funding dương {funding*100:.3f}%")
+    if side == "long" and funding > 0.001:
+        s -= 1
+    if side == "short" and funding < -0.001:
+        s -= 1
+    # Đã chạy quá xa trong 24h
+    if (side == "long" and change24h > 20) or (side == "short" and change24h < -20):
+        s -= 1.5; why.append("Đã biến động mạnh 24h (trừ điểm)")
+    return round(s, 2), why
+
+
+def _levels(df, side, price, a):
+    """SL theo cấu trúc (đáy/đỉnh 6 nến) – KHÔNG bao giờ kéo SL vào giữa vùng râu nến.
+    Cấu trúc quá xa → diagnose() bỏ tín hiệu thay vì đặt SL sai chỗ."""
+    if side == "long":
+        swing = min(df.low[-6:])
+        sl = min(price - cfg.ATR_SL_MULT * a, swing - 0.15 * a)
+        tp = price + max(cfg.ATR_TP_MULT * a, cfg.MIN_RR * 1.2 * (price - sl))   # luôn đảm bảo RR >= MIN_RR
+    else:
+        swing = max(df.high[-6:])
+        sl = max(price + cfg.ATR_SL_MULT * a, swing + 0.15 * a)
+        tp = price - max(cfg.ATR_TP_MULT * a, cfg.MIN_RR * 1.2 * (sl - price))
+    return sl, tp
+
+
+def flow_adjust(sig):
+    """Điểm dòng tiền (OI / funding) – gọi SAU khi đã lấy symbol_context, TRƯỚC khi xét ngưỡng & xếp hạng.
+    Trả về (điểm cộng/trừ, lý do)."""
+    c = sig.context or {}
+    d, why = 0.0, []
+    sign = 1 if sig.side == "long" else -1
+    oi, px = c.get("oi_chg_1h"), c.get("px_chg_1h")
+    if oi is not None and c.get("setup") != "range":     # range: giá đang đi ngược hướng lệnh → luật OI không áp dụng
+        if oi > 1.0 and px is not None and sign * px > 0:
+            d += 0.5; why.append(f"OI +{oi:.1f}%/1h cùng giá chạy (tiền mới vào)")
+        elif oi < -1.5:
+            d -= 1.0; why.append(f"OI {oi:.1f}%/1h – giá chạy nhưng tiền rút (trừ điểm)")
+    f = c.get("funding")
+    if f is not None:
+        if (sig.side == "long" and f < -0.0003) or (sig.side == "short" and f > 0.0003):
+            d += 0.5; why.append(f"Funding ngược đám đông {f*100:+.3f}%")
+        if (sig.side == "long" and f > 0.001) or (sig.side == "short" and f < -0.001):
+            d -= 1.0; why.append(f"Funding quá nóng {f*100:+.3f}% (trừ điểm)")
+    return round(d, 2), why
+
+
+def news_adjust(sig):
+    """Điểm tin tức – gọi SAU khi đã gắn news.coin() vào context, TRƯỚC khi xét ngưỡng & xếp hạng.
+    Điểm = trọng số tin (bộ tự học đo) × NEWS_SCORE_MAX × độ lệch tin theo hướng lệnh. Trả về (điểm, lý do)."""
+    c = sig.context or {}
+    n = c.get("news_n") or 0
+    al = news_align(sig.side, c)
+    if not n or abs(al) < cfg.NEWS_MIN_BIAS:
+        return 0.0, []
+    cap = 2 * cfg.NEWS_SCORE_MAX
+    d = round(max(-cap, min(cap, news_weight() * cfg.NEWS_SCORE_MAX * al)), 2)
+    if not d:
+        return 0.0, []
+    head = c.get("news_head") or ""
+    why = (f"Tin tức {'ủng hộ' if d > 0 else 'ngược chiều'} {al:+.2f} ({n} bài, {d:+.2f} điểm)"
+           + (f": {head[:90]}" if head else ""))
+    return d, [why]
+
+
+def apply_context(sig):
+    """Cộng điểm dòng tiền (OI/funding) + tin tức vào tín hiệu rồi xét lại ngưỡng. Trả về lý do loại ('' nếu đạt).
+    Gọi đúng 1 lần cho mỗi tín hiệu (điểm cộng dồn vào sig.score)."""
+    for fn in (flow_adjust, news_adjust):
+        d, why = fn(sig)
+        if d:
+            sig.score = round(sig.score + d, 2)
+            sig.reasons = list(sig.reasons) + why
+    min_score = min_score_for(sig)
+    if sig.score < min_score:
+        sig.rejected = f"điểm thấp ({sig.score} < {min_score})"
+        return sig.rejected
+    sig.rejected = ""
+    return ""
+
+
+apply_flow = apply_context        # tên cũ (v2.8–v3.2)
+
+
+def decide(sig):
+    """Quyết định vào lệnh (thay cho AI từ v4.0): ứng viên đến đây đã qua cổng, trigger, ngưỡng điểm, luật chặn.
+    Trả về dict mô tả quyết định – 'confidence' chỉ để hiển thị (50 = vừa đủ ngưỡng), KHÔNG dùng để tăng rủi ro
+    (211 tín hiệu bóng v3.2: điểm cao không thắng nhiều hơn). Rủi ro chỉ co giãn theo tin tức – xem risk.quality_mult."""
+    c = sig.context or {}
+    ms = min_score_for(sig)
+    ok = sig.score >= ms and sig.rr >= min_rr_for(sig) and not blocked_by(sig)
+    n = c.get("news_n") or 0
+    al = round(news_align(sig.side, c), 2) if n else 0.0
+    parts = [f"điểm {sig.score:g} (ngưỡng {ms:g})", f"RR {sig.rr:.2f}",
+             f"tin coin {al:+.2f} ({n} bài)" if n else "không có tin riêng"]
+    if c.get("fng") is not None:
+        parts.append(f"F&G {c['fng']}")
+    if c.get("news_events"):
+        parts.append("sự kiện: " + ",".join(c["news_events"]))
+    return {"decision": sig.side.upper() if ok else "SKIP", "confidence": int(max(1, min(99, round(50 + 10 * (sig.score - ms))))),
+            "reason": "; ".join(parts), "model": "kỹ thuật+tin tức", "news": al}
+
+
+def _context(df, htf, trend, funding, change24h, market, a, setup):
+    r, h = df.row(-1), htf.row(-1)
+    ctx = {
+        "setup": setup,
+        "price": float(r.close), "rsi": round(float(r.rsi), 1), "adx": round(float(r.adx), 1),
+        "atr_pct": round(float(r.atr_pct), 2), "vol_ratio": round(float(r.vol_ratio), 2),
+        "ema9": round(float(r.ema9), 6), "ema21": round(float(r.ema21), 6), "ema50": round(float(r.ema50), 6),
+        "ema200": round(float(r.ema200), 6), "vwap": round(float(r.vwap), 6),
+        "macd_hist": round(float(r.macd_hist), 6), "close_pos": round(float(r.close_pos), 2),
+        "htf_trend": trend, "htf_rsi": round(float(h.rsi), 1), "htf_adx": round(float(h.adx), 1),
+        "funding": funding, "change24h": round(change24h, 2), "hour": time.localtime().tm_hour,
+        "bb_pos": round(float((r.close - r.bb_lo) / (r.bb_up - r.bb_lo)), 2) if r.bb_up != r.bb_lo else 0.5,
+    }
+    if market:
+        ctx.update(market)
+    return ctx
+
+
+def _range_setup(symbol, df, htf, funding, change24h, market, info):
+    """Setup đảo chiều khi khung 1h đi ngang: giá chạm biên Bollinger 15m, RSI cực trị rồi quay đầu,
+    nến từ chối rõ ràng → mục tiêu dải giữa Bollinger (TP gần, tỉ lệ thắng cao). Trả về (sig, lý do)."""
+    r, p, h = df.row(-1), df.row(-2), htf.row(-1)
+    if h.adx >= cfg.RANGE_MAX_HTF_ADX or r.adx >= cfg.RANGE_MAX_ADX:
+        return None, "1h sideway nhưng 15m đang có lực (không đánh range)"
+    if r.atr_pct < cfg.MIN_ATR_PCT:
+        return None, f"biến động thấp ({r.atr_pct:.2f}%)"
+    if r.vol_ratio < cfg.MIN_VOL_RATIO:
+        return None, f"volume yếu (x{r.vol_ratio:.2f})"
+    n = df.n
+    rsi_min = min(df.rsi[n - 3:n]); rsi_max = max(df.rsi[n - 3:n])
+    touch_lo = any(df.low[i] <= df.bb_lo[i] for i in range(n - 2, n))
+    touch_hi = any(df.high[i] >= df.bb_up[i] for i in range(n - 2, n))
+    side = None
+    if touch_lo and rsi_min <= cfg.RANGE_RSI_LONG and r.rsi > p.rsi and r.close > r.open \
+            and r.close_pos >= cfg.RANGE_CLOSE_POS and r.close > r.bb_lo:
+        side = "long"
+    elif touch_hi and rsi_max >= 100 - cfg.RANGE_RSI_LONG and r.rsi < p.rsi and r.close < r.open \
+            and r.close_pos <= 1 - cfg.RANGE_CLOSE_POS and r.close < r.bb_up:
+        side = "short"
+    if side is None:
+        return None, "1h sideway – chưa có nhịp đảo chiều tại biên"
+    info["side"] = side
+    m = market or {}
+    if side == "long" and (m.get("btc_trend_1h") == -1 or (m.get("btc_chg_1h") or 0) < -cfg.BTC_GATE_CHG):
+        return None, "BTC đang xu hướng giảm"
+    if side == "short" and (m.get("btc_trend_1h") == 1 or (m.get("btc_chg_1h") or 0) > cfg.BTC_GATE_CHG):
+        return None, "BTC đang xu hướng tăng"
+    price, a = float(r.close), float(r.atr)
+    if side == "long":
+        sl = min(df.low[n - 3:n]) - 0.25 * a
+        tp = float(r.bb_mid)
+    else:
+        sl = max(df.high[n - 3:n]) + 0.25 * a
+        tp = float(r.bb_mid)
+    risk = abs(price - sl)
+    if risk < 0.6 * a:                                   # SL quá sát → dễ bị quét nhiễu
+        sl = price - 0.6 * a if side == "long" else price + 0.6 * a
+        risk = 0.6 * a
+    if risk > cfg.RANGE_MAX_SL_ATR * a:
+        return None, f"range: SL cấu trúc quá xa ({risk / a:.1f} ATR)"
+    rr = abs(tp - price) / risk
+    if rr < cfg.RANGE_MIN_RR:
+        return None, f"range: không đủ chỗ tới dải giữa (RR {rr:.2f})"
+
+    # điểm
+    tw = LEARNED.get("trigger_w") or {}
+    trig = "Đảo chiều tại biên Bollinger + RSI quay đầu"
+    s_, why = 1.5 * tw.get("range_revert", 1.0), [trig, "Chạm biên Bollinger & đóng lại trong biên"]
+    s_ += 1.0
+    ext = rsi_min if side == "long" else 100 - rsi_max
+    if ext <= 28:
+        s_ += 1.0; why.append(f"RSI cực trị ({rsi_min if side == 'long' else rsi_max:.0f})")
+    elif ext <= 32:
+        s_ += 0.5; why.append(f"RSI mạnh ({rsi_min if side == 'long' else rsi_max:.0f})")
+    if (side == "long" and r.close_pos >= 0.75) or (side == "short" and r.close_pos <= 0.25):
+        s_ += 0.5; why.append("Nến từ chối mạnh")
+    if r.vol_ratio >= 1.3:
+        s_ += 0.5; why.append(f"Volume x{r.vol_ratio:.1f}")
+    if r.adx < 18:
+        s_ += 0.5; why.append(f"Đi ngang rõ (ADX15 {r.adx:.0f})")
+    if 40 <= h.rsi <= 60:
+        s_ += 0.5; why.append("RSI 1h trung tính")
+    if (side == "long" and (m.get("btc_chg_1h") or 0) >= 0) or (side == "short" and (m.get("btc_chg_1h") or 0) <= 0):
+        s_ += 0.5; why.append("BTC không đi ngược")
+    if rr >= 1.8:
+        s_ += 0.5; why.append(f"RR tới dải giữa {rr:.1f}")
+    if (side == "long" and change24h < -15) or (side == "short" and change24h > 15):
+        s_ -= 1.0; why.append("Đang rơi/tăng mạnh 24h (dao rơi – trừ điểm)")
+    score = round(s_, 2)
+    info["score"] = score
+    ctx = _context(df, htf, 0, funding, change24h, market, a, "range")
+    ctx["bb_mid"] = round(tp, 8)
+    sig = Signal(symbol, side, score, price, a, sl, tp, why, ctx, triggers=["range_revert"])
+    ms = min_score_for(sig)
+    if score < ms:
+        sig.rejected = f"điểm thấp ({score} < {ms})"
+        return (sig if score >= ms - 1.5 else None), sig.rejected
+    return sig, ""
+
+
+def min_rr_for(sig):
+    return cfg.RANGE_MIN_RR if (sig.context or {}).get("setup") == "range" else cfg.MIN_RR
+
+
+def min_score_for(sig):
+    """Ngưỡng điểm theo setup: xu hướng dùng MIN_SCORE (bộ tự học chỉnh), range dùng RANGE_MIN_SCORE."""
+    if (sig.context or {}).get("setup") == "range":
+        return cfg.RANGE_MIN_SCORE
+    return LEARNED.get("min_score") or cfg.MIN_SCORE
+
+
+NEAR_PREFIX = "suýt qua cổng: "
+
+
+def diagnose(symbol, ohlcv_ltf, ohlcv_htf, funding=0.0, change24h=0.0, market=None):
+    """Trả về (signal, lý do loại, số liệu tóm tắt).
+    - lý do == ""          → tín hiệu đạt phần kỹ thuật (main còn cộng dòng tiền + tin tức, xét luật chặn)
+    - signal != None + lý do "điểm thấp…" → tín hiệu "suýt đạt" – vẫn được theo dõi kết quả bóng.
+    - signal != None + lý do "suýt qua cổng: …" → v4.1: trượt ĐÚNG 1 cổng, sát ngưỡng, mọi thứ khác đạt – theo dõi bóng
+      để bộ tự học biết có nên nới cổng đó không (không bao giờ vào lệnh).
+    - signal == None       → bị loại ở cổng bắt buộc."""
+    if len(ohlcv_ltf) < 120 or len(ohlcv_htf) < 80:
+        return None, "thiếu dữ liệu", {}
+    df = enrich(to_frame(ohlcv_ltf[:-1]))      # bỏ nến đang hình thành → chỉ dùng nến đã đóng
+    htf = enrich(to_frame(ohlcv_htf[:-1]))
+    return evaluate(symbol, df, htf, funding, change24h, market)
+
+
+def evaluate(symbol, df, htf, funding=0.0, change24h=0.0, market=None, hour=None):
+    """Như diagnose() nhưng nhận khung đã tính chỉ báo (df 15m, htf 1h – nến cuối là nến đã đóng gần nhất).
+    Dùng chung cho bot và công cụ tối ưu walk-forward (tools/walkforward.py) để hai bên chấm tín hiệu y hệt nhau.
+    hour: giờ địa phương của tín hiệu (None = bây giờ)."""
+    r, h = df.row(-1), htf.row(-1)
+    info = {"adx15": round(r.adx, 1), "adx1h": round(h.adx, 1), "rsi": round(r.rsi, 1),
+            "atr%": round(r.atr_pct, 2), "vol": round(r.vol_ratio, 2)}
+    trend = _htf_trend(htf)
+    if trend == 0:
+        if cfg.RANGE_ENABLED:
+            sig, why = _range_setup(symbol, df, htf, funding, change24h, market, info)
+            if sig is not None and hour is not None:
+                sig.context["hour"] = hour
+            return sig, why, info
+        why = "1h sideway" if h.adx < cfg.HTF_MIN_ADX else "1h không rõ xu hướng (giá/EMA lệch nhau)"
+        return None, why, info
+    side = "long" if trend == 1 else "short"
+    info["side"] = side
+    chg1h = (r.close / df.close[-5] - 1) * 100 if df.n >= 5 and df.close[-5] else None
+    info["chg1h"] = round(chg1h, 2) if chg1h is not None else None
+    fails = gate_fails(r, side, trend, market, chg1h=chg1h)
+    near = None
+    if fails:
+        g = fails[0]
+        if len(fails) == 1 and g["key"] and gate_near(g["key"], g["val"], g["thr"]):
+            near = g                           # trượt đúng 1 cổng, sát ngưỡng → chấm tiếp để theo dõi bóng
+        else:
+            return None, g["why"], info
+    triggers = _triggers(df, side)
+    if not triggers:
+        return None, (near["why"] if near else "không có trigger (MACD/EMA cắt, breakout, pullback, nhấn chìm)"), info
+    score, reasons = _score(df, htf, side, triggers, funding, change24h)
+    info["score"] = score
+
+    price, a = float(r.close), float(r.atr)
+    sl, tp = _levels(df, side, price, a)
+    sl_atr = abs(price - sl) / a if a else 0.0
+    t = gv("max_sl_atr")
+    if sl_atr > t:
+        g = {"key": "max_sl_atr", "why": f"SL theo cấu trúc quá xa ({sl_atr:.1f} ATR)", "val": sl_atr, "thr": t}
+        if near is None and gate_near("max_sl_atr", sl_atr, t):
+            near = g
+        else:
+            return None, (near or g)["why"], info
+    ctx = _context(df, htf, trend, funding, change24h, market, a, "trend")
+    ctx.update(ext_atr=round(abs(r.close - r.ema21) / a, 2) if a else 0.0,
+               chg1h=info["chg1h"], sl_atr=round(sl_atr, 2))
+    if hour is not None:
+        ctx["hour"] = hour
+    sig = Signal(symbol, side, score, price, a, sl, tp, reasons, ctx,
+                 triggers=sorted({trig_key(t) for t in triggers}))
+
+    min_score = min_score_for(sig)
+    if near:
+        # chỉ đáng theo dõi nếu nới cổng thì tín hiệu này sẽ được vào (đủ điểm, đủ RR)
+        if score < min_score or sig.rr < cfg.MIN_RR:
+            return None, near["why"], info
+        sig.rejected = NEAR_PREFIX + near["why"]
+        sig.context.update(gate_near=near["key"], gate_val=round(near["val"], 3))
+        return sig, sig.rejected, info
+    if score < min_score:
+        sig.rejected = f"điểm thấp ({score} < {min_score})"
+        return (sig if score >= min_score - 1.5 else None), sig.rejected, info
+    if sig.rr < cfg.MIN_RR:
+        sig.rejected = f"RR thấp ({sig.rr:.2f})"
+        return None, sig.rejected, info
+    return sig, "", info
+
+
+def analyze(symbol, ohlcv_ltf, ohlcv_htf, funding=0.0, change24h=0.0):
+    sig, why, _ = diagnose(symbol, ohlcv_ltf, ohlcv_htf, funding, change24h)
+    return sig if (sig and not why) else None
