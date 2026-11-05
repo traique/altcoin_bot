@@ -81,11 +81,36 @@ class _DB:
 
 
 class Store:
+    TABLES = ("trades", "equity", "kv", "signals", "reviews", "events", "scans", "learn_log", "locks", "heartbeats")
+
     def __init__(self):
         self.db = _DB(cfg.DATABASE_URL)
         self.pg = self.db.pg
         self._init()
+        self.reset_done = self._maybe_reset()
         log.info("Storage: %s", "PostgreSQL dùng chung" if self.pg else "SQLite cục bộ")
+
+    def _maybe_reset(self):
+        """RESET_DATA=<mã bất kỳ> (vd 2026-11-05): xoá TOÀN BỘ dữ liệu một lần rồi bắt đầu lại (vốn ảo, lệnh, tín hiệu,
+        tham số tự học, nhật ký…). Mã đã dùng được ghi lại → khởi động lại không xoá nữa; đổi mã để xoá lần nữa.
+        Dùng khi deploy từ GitHub (không có File Manager để xoá data/), và cả với DATABASE_URL dùng chung (xoá cả DB đó).
+        Chạy thật còn lệnh mở thì KHÔNG xoá (mất dấu vị thế trên sàn) – đóng hết lệnh trước. Trả về mã đã xoá hoặc ''."""
+        tok = (os.getenv("RESET_DATA") or "").strip()
+        if not tok or tok.lower() in ("0", "no", "false", "off"):
+            return ""
+        if self.get("reset_token") == tok:
+            return ""
+        if cfg.MODE == "live":
+            n = self.db.run("SELECT COUNT(*) AS n FROM trades WHERE status='open'", fetch=True)[0]["n"]
+            if n:
+                log.error("RESET_DATA=%s bị bỏ qua: chạy thật còn %d lệnh mở – đóng hết lệnh rồi khởi động lại", tok, n)
+                return ""
+        for t in self.TABLES:
+            self.db.run(f"DELETE FROM {t}")
+        self.set("reset_token", tok)
+        self.set("reset_at", time.time())
+        log.warning("Đã xoá toàn bộ dữ liệu (RESET_DATA=%s) – bot bắt đầu lại từ đầu", tok)
+        return tok
 
     def _init(self):
         pk = "SERIAL PRIMARY KEY" if self.pg else "INTEGER PRIMARY KEY AUTOINCREMENT"

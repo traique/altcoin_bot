@@ -73,14 +73,24 @@ Nhớ nhắn `/start` cho bot Telegram một lần để bot gửi được tin.
 
 > **Ổ đĩa Botkeep có hạn (1 GB ở gói free).** Bản này đã bỏ pandas/numpy, cài pip không cache và tự dọn cache → tổng thư viện ~170 MB. Nếu server từng bị báo `disk I/O error` / `readonly database`: vào File Manager của Botkeep xoá thư mục `.cache` (nếu còn) và `data/`, rồi Start lại. Khuyên dùng `DATABASE_URL` Supabase cả trên Botkeep để dữ liệu không nằm trên ổ đĩa server.
 
-Botkeep chạy app theo runtime, nhận code qua **ZIP upload** hoặc **GitHub**, biến môi trường nhập ở mục **Secrets** của panel.
+Botkeep chạy app theo runtime, nhận code qua **GitHub** (khuyên dùng) hoặc **ZIP upload**, biến môi trường nhập ở mục **Secrets** của panel.
 
-1. Tạo server mới → chọn profile **Python** (phiên bản 3.10 trở lên).
-2. Nguồn code: upload file ZIP này (hoặc đẩy lên GitHub rồi chọn repo/branch).
+### Deploy từ GitHub: nhánh `botkeep` (giống repo Stockvn)
+
+Không trỏ Botkeep vào `main` (có test, công cụ, dữ liệu walk-forward… không cần trên server). Mỗi lần `main` đổi, GitHub Actions (`.github/workflows/botkeep-branch.yml`) chạy bộ kiểm thử offline, tạo gói bằng `scripts/build_botkeep_bundle.py` (chỉ `run.py`, `requirements.txt`, `.env.example`, `README.md`, `bot/*.py`; kiểm giới hạn Botkeep 250 mục / 4 MB, biên dịch, mã bản dựng đúng bản phát hành) rồi đẩy **đúng nội dung gói** lên nhánh **`botkeep`** (kèm `.gitignore` cho `data/` và `.env`). Test hỏng, gói vượt giới hạn hoặc sai mã bản dựng thì lượt chạy báo đỏ và nhánh giữ bản cũ. File zip của mỗi lượt cũng nằm ở mục **Artifacts** trên trang Actions để upload tay khi cần.
+
+1. Trên Botkeep: nguồn **GitHub**, repo `traique/altcoin_bot`, nhánh **`botkeep`**, start command `python run.py`, Python 3.13. Repo riêng tư thì cấp cho Botkeep quyền đọc repo trên GitHub.
+2. Bắt đầu lại từ đầu: đặt `RESET_DATA=<mã bất kỳ>` (vd `2026-11-05`) trong Secrets → lần khởi động đầu tiên bot xoá **toàn bộ** dữ liệu (vốn ảo về `PAPER_START_BALANCE`, lệnh, tín hiệu, tham số tự học, nhật ký – kể cả DB dùng chung nếu có `DATABASE_URL`) rồi báo Telegram "🧹 Đã xoá toàn bộ dữ liệu cũ". Khởi động lại với cùng mã thì không xoá nữa; đổi mã để xoá lần nữa. Chạy thật còn lệnh mở thì bot không xoá.
+3. Chạy tay (khi Actions tắt): `python scripts/build_botkeep_bundle.py && scripts/publish_botkeep_branch.sh dist/botkeep`.
+
+### Tạo server
+
+1. Tạo server mới → chọn profile **Python** (phiên bản 3.10 trở lên; Botkeep hiện chạy 3.13).
+2. Nguồn code: GitHub nhánh `botkeep` như trên (hoặc upload file zip từ mục Artifacts của Actions / `python scripts/build_botkeep_bundle.py`).
 3. **Start command**: `python run.py` (file này tự cài thư viện trong `requirements.txt` rồi chạy bot, tự khởi động lại nếu bot crash).
 4. **Secrets**: nhập các biến trong `.env.example` mà anh cần (tối thiểu: `MODE=paper`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `DASHBOARD_PASS`). Không cần key AI nào. Nếu panel còn biến `AI_*`, `NINEROUTER_*`, `OPENROUTER_*` của bản cũ thì xoá (để lại bot cũng bỏ qua). Hoặc tạo file `.env` trong ZIP – nhưng để key trong Secrets an toàn hơn.
 5. Bấm Start, xem console: dòng `🚀 Bot khởi động – chế độ PAPER` là chạy được.
-   **Nâng cấp từ v3.x lên v4.0**: upload zip đè, rồi xoá file `bot/ai.py` cũ nếu còn (trang Phiên bản báo "khác bản phát hành" khi còn sót file cũ); giữ thư mục `data/` hoặc `DATABASE_URL` để giữ lịch sử – bot tự nâng cấp tham số tự học 1 lần (bỏ ngưỡng phủ quyết AI, giữ TP1/trọng số đã học).
+   **Nâng cấp từ v3.x lên v4.x bằng upload zip**: upload zip đè, rồi xoá file `bot/ai.py` cũ nếu còn (trang Phiên bản báo "khác bản phát hành" khi còn sót file cũ); giữ thư mục `data/` hoặc `DATABASE_URL` để giữ lịch sử – bot tự nâng cấp tham số tự học 1 lần (bỏ ngưỡng phủ quyết AI, giữ TP1/trọng số đã học). Deploy từ nhánh `botkeep` thì không có file cũ sót lại.
 6. Dashboard: bot mở cổng theo biến `PORT` / `SERVER_PORT` / `APP_PORT` nếu Botkeep cấp, không thì `DASHBOARD_PORT` (8080). Trong console lúc khởi động có dòng `Dashboard: http://0.0.0.0:<cổng>` – đó là cổng cần mở/expose trong panel Botkeep (mục Network/Ports nếu có). Truy cập `http://<ip-server>:<cổng>/` – có trang đăng nhập (`DASHBOARD_USER`/`DASHBOARD_PASS`, nhớ 30 ngày); để trống `DASHBOARD_PASS` nếu không muốn hỏi. Cổng web được mở ngay trong 1–2 giây đầu, trước khi bot tải dữ liệu OKX, để host không báo "not responding". Nếu Botkeep vẫn báo vậy: so sánh **assigned port** trong panel với số cổng trong dòng log `Dashboard: cổng …` – nếu khác, đặt Secret `PORT=<assigned port>`. Thử `http://<ip>:<cổng>/health` trước: trả `{"ok":true}` nghĩa là server đã chạy, chỉ còn vấn đề cổng/đường dẫn. File `botkeep.env` có sẵn danh sách biến. **Khuyên dùng:** trên panel chỉ khai các bí mật (token Telegram, Zoom, mật khẩu dashboard) cùng `MODE`, `INSTANCE_NAME`, `PUBLIC_URL`. Mọi thông số khác đã có mặc định tốt nhất trong code và tự cập nhật theo từng bản; nếu panel còn khai biến thông số thì giá trị cũ đó sẽ thắng, nên hãy xoá chúng. Trong khung `.env` của Botkeep, dòng `__BOTKEEP_KEEP_SECRET_…__` giữ nguyên để giữ giá trị; không dán dòng `<...>`. Lúc khởi động, log in dòng `Thông số đang dùng: …` để kiểm tra.
 
 Bot dùng ~200 MB RAM; v4.0 không cần chạy thêm 9Router hay dịch vụ AI nào. Server cần ra được Internet tới OKX, các trang RSS, binance.com và api.alternative.me (tin tức).
@@ -229,6 +239,8 @@ Bot **không chặn sẵn** luật nào. Mỗi luật được theo dõi kết q
 
 ```
 run.py            – start command cho Botkeep/Render: tự cài thư viện, chạy & tự khởi động lại bot
+scripts/          – build_botkeep_bundle.py (tạo & kiểm tra gói Botkeep), publish_botkeep_branch.sh (đẩy nhánh botkeep)
+.github/workflows/botkeep-branch.yml – mỗi lần main đổi: test → gói → nhánh botkeep (Botkeep deploy từ nhánh này)
 render.yaml       – blueprint tạo Web Service free trên Render
 bot/config.py     – đọc biến môi trường / .env
 bot/exchange.py   – OKX qua ccxt

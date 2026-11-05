@@ -16,13 +16,17 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "4.2.0"
+VERSION = "4.2.1"
 RELEASED = "2026-11-05"
-RELEASE_BUILD = "96d357e"          # ghi bởi `python -m bot.version --stamp`
+RELEASE_BUILD = "7a3e36b"          # ghi bởi `python -m bot.version --stamp`
 BUILD = RELEASED                   # tương thích các chỗ cũ dùng BUILD
 
 # Mới nhất ở trên: (phiên bản, ngày, các thay đổi – câu ngắn, đọc tốt trên điện thoại)
 NOTES = (
+    ("4.2.1", "2026-11-05", (
+        "Deploy thẳng từ GitHub như repo Stockvn: GitHub Actions chạy test, tạo gói rồi đẩy lên nhánh 'botkeep' – Botkeep trỏ vào nhánh này",
+        "RESET_DATA=<mã>: xoá toàn bộ dữ liệu một lần khi khởi động để bắt đầu lại từ đầu (không xoá khi chạy thật còn lệnh mở)",
+    )),
     ("4.2.0", "2026-11-05", (
         "Bỏ điểm trừ 'xu hướng 1h đã chạy lâu' (ADX 1h ≥ 35) của v3.2 – rút từ 5 ngày; kiểm chứng 89 ngày × 40 coin: kỳ vọng mỗi tín hiệu tốt hơn ở cả hai nửa (+0,15/−0,03R so với +0,07/−0,05R)",
         "Luật late_trend vẫn trong danh mục để bộ tự học tự chặn khi nhóm này lỗ rõ; LATE_TREND_PENALTY=1 để trừ điểm lại như cũ",

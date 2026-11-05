@@ -560,6 +560,10 @@ class Bot:
                         self.store.set("last_version", cur)
                     except Exception as e:
                         log.debug("update notice: %s", e)
+                    if getattr(self.store, "reset_done", ""):
+                        self.notify.send(f"🧹 Đã xoá toàn bộ dữ liệu cũ (RESET_DATA={self.store.reset_done}) – bắt đầu lại "
+                                         f"từ đầu với vốn {self.engine.equity():.2f} USDT. Khởi động lại sẽ không xoá nữa "
+                                         f"(đổi giá trị RESET_DATA để xoá lần nữa).")
                     self.notify.send(f"🚀 Bot v{VERSION} khởi động – chế độ {cfg.MODE.upper()} | vốn {self.engine.equity():.2f} USDT | x{cfg.LEVERAGE} | "
                                      f"rủi ro {cfg.RISK_PER_TRADE*100:.1f}%/lệnh (co giãn theo tin tức), tối đa {cfg.MAX_TOTAL_RISK*100:.0f}% tổng | "
                                      f"quyết định: kỹ thuật + tin tức (không AI)")

@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 tools/wf_data/
 tools/wf_out/
+dist/
