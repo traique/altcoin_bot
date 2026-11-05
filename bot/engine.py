@@ -32,7 +32,7 @@ def plan_exit(sig, entry):
 class BaseEngine:
     def __init__(self, okx, store, notify):
         self.okx, self.store, self.notify = okx, store, notify
-        self.on_close = None   # callback(trade, exit, pnl, pnl_pct, reason) – Bot gắn vào để AI tổng kết
+        self.on_close = None   # callback(trade, exit, pnl, pnl_pct, reason) – Bot gắn vào để tổng kết lệnh
 
     # ---------- helpers
     def _pnl(self, side, entry, exit_, notional):
@@ -41,13 +41,13 @@ class BaseEngine:
         fee = (notional + qty * exit_) * cfg.TAKER_FEE
         return gross - fee, fee
 
-    def _size(self, sig, ai, equity, entry=None):
-        """(notional, hệ số rủi ro): rủi ro cơ bản × chất lượng tín hiệu × chuỗi thua, trong ngân sách rủi ro còn lại."""
+    def _size(self, sig, dec, equity, entry=None):
+        """(notional, hệ số rủi ro): rủi ro cơ bản × hệ số tin tức × chuỗi thua, trong ngân sách rủi ro còn lại."""
         try:
             recent = self.store.last_closed(6)
         except Exception:
             recent = []
-        mult = risk_mult(sig, ai, recent)
+        mult = risk_mult(sig, dec, recent)
         budget = risk_budget(equity, self.store.open_trades())
         notional = position_notional(equity, entry or sig.price, sig.sl, mult=mult, budget=budget)
         if notional < 1:
@@ -72,14 +72,15 @@ class BaseEngine:
         m = self.okx.market(sig.symbol)
         return contracts, contracts * float(m.get("contractSize") or 1) * sig.price
 
-    def _trade_row(self, sig, ai, entry, notional, contracts, order_id="", mult=1.0):
+    def _trade_row(self, sig, dec, entry, notional, contracts, order_id="", mult=1.0):
         mode, tp, tp1 = plan_exit(sig, entry)
+        dec = dec or {}
         return dict(
             mode=cfg.MODE, symbol=sig.symbol, side=sig.side, entry=entry, exit=None,
             sl=sig.sl, tp=tp, notional=notional, margin=margin_for(notional), contracts=contracts,
             pnl=0, pnl_pct=0, fee=0, opened_at=time.time(), closed_at=None, status="open",
-            reason_open="; ".join(sig.reasons) + (f" | AI: {ai.get('reason','')}" if ai else ""),
-            reason_close="", ai_model=(ai or {}).get("model"), ai_conf=(ai or {}).get("confidence"),
+            reason_open="; ".join(sig.reasons) + (f" | Quyết định: {dec['reason']}" if dec.get("reason") else ""),
+            reason_close="", conf=dec.get("confidence"), news=dec.get("news"),
             score=sig.score, order_id=order_id,
             tp1=tp1, tp1_done=0, peak=entry, peak_ts=time.time(), realized=0.0, atr=sig.atr,
             notional0=notional, exit_mode=mode, sl0=sig.sl, risk_mult=round(mult, 3), tp1_ts=None,
@@ -105,7 +106,7 @@ class BaseEngine:
             f"Giá: {t['entry']:.6g} | SL: {t['sl']:.6g} | {plan}\n"
             f"Khối lượng: {t['notional']:.2f} USDT (ký quỹ {t['margin']:.2f}, x{cfg.LEVERAGE}) | "
             f"rủi ro {risk_of(t['notional'], t['entry'], t['sl']):.3f} USDT ({t.get('risk_mult') or 1:.2f}× cơ bản)\n"
-            f"Điểm KT: {t['score']} | AI: {t['ai_model']} ({t['ai_conf']}%)\n"
+            f"Điểm: {t['score']} | tin tức {t.get('news') or 0:+.2f}\n"
             f"Lý do: {t['reason_open'][:300]}")
 
     def _announce_partial(self, t, price, pnl):
@@ -173,17 +174,17 @@ class PaperEngine(BaseEngine):
                 eq += pnl
         return eq
 
-    def open(self, sig, ai):
+    def open(self, sig, dec=None):
         equity = self.balance()
         slip = cfg.SLIPPAGE if sig.side == "long" else -cfg.SLIPPAGE
         entry = sig.price * (1 + slip)
-        notional, mult = self._size(sig, ai, equity, entry)     # tính theo giá khớp (đã trượt) để rủi ro đúng như dự tính
+        notional, mult = self._size(sig, dec, equity, entry)    # tính theo giá khớp (đã trượt) để rủi ro đúng như dự tính
         if notional < 1:
             return None
         contracts, notional = self._fit_lot(sig, notional, equity)
         if not contracts:
             return None
-        t = self._trade_row(sig, ai, entry, notional, contracts, mult=mult)
+        t = self._trade_row(sig, dec, entry, notional, contracts, mult=mult)
         t["id"] = self.store.open_trade(t)
         self._announce_open(t)
         return t
@@ -260,9 +261,9 @@ class LiveEngine(BaseEngine):
         except Exception:
             return float(self.store.get("last_equity", 0))
 
-    def open(self, sig, ai):
+    def open(self, sig, dec=None):
         total, free = self.okx.balance_usdt()
-        notional, mult = self._size(sig, ai, total)
+        notional, mult = self._size(sig, dec, total)
         if notional < 1:
             return None
         contracts, notional = self._fit_lot(sig, notional, free)
@@ -274,7 +275,7 @@ class LiveEngine(BaseEngine):
         _, tp, _ = plan_exit(sig, sig.price)
         oid, fill = self.okx.open_position(sig.symbol, sig.side, contracts, sig.sl, tp)
         entry = fill or sig.price
-        t = self._trade_row(sig, ai, entry, notional, contracts, order_id=oid, mult=mult)
+        t = self._trade_row(sig, dec, entry, notional, contracts, order_id=oid, mult=mult)
         t["id"] = self.store.open_trade(t)
         self._announce_open(t)
         return t
@@ -325,10 +326,14 @@ class LiveEngine(BaseEngine):
         return pnl
 
     def close(self, t, price, reason):
+        """Đóng trên sàn TRƯỚC, xong mới ghi DB. Lệnh đóng lỗi → báo lỗi lên trên, KHÔNG ghi đóng: lệnh vẫn được theo
+        dõi và lượt sau thử lại; nếu thật ra sàn vừa khớp SL/TP thì monitor() ghi đóng theo giá khớp thật.
+        (Bản cũ vẫn ghi đóng khi lệnh đóng lỗi → vị thế còn mở trên sàn nhưng bot thôi theo dõi.)"""
         try:
             self.okx.close_position(t["symbol"], t["side"], t["contracts"])
         except Exception as e:
-            log.error("close_position %s: %s", t["symbol"], e)
+            log.error("close_position %s: %s – giữ lệnh, thử lại lượt sau", t["symbol"], e)
+            raise
         self._finalize(t, price, reason)
 
     def monitor(self):
@@ -373,8 +378,11 @@ class LiveEngine(BaseEngine):
                     upd["sl"] = p
                     need_algo = True
                 elif kind in ("STALL", "TIMEOUT"):
-                    self.close(t, price, self._reason(kind, t))
-                    closed = True
+                    try:
+                        self.close(t, price, self._reason(kind, t))
+                        closed = True
+                    except Exception:
+                        pass                    # close() đã ghi log; lệnh vẫn mở → lượt sau thử đóng lại
                     break
                 # SL/TP thật do sàn khớp – xử lý ở nhánh "không còn vị thế" lần sau
             if closed:

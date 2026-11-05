@@ -3,6 +3,30 @@
 Các script ở đây **không** được bot import và **không** nằm trong bản dựng (`bot/version.py` chỉ tính `bot/*.py` và `run.py`).
 Chạy trên máy tính hoặc VPS, không chạy trên Botkeep.
 
+## Tối ưu walk-forward trên nến lịch sử (`walkforward.py`)
+
+Thử hàng nghìn bộ ngưỡng (10 cổng lọc, điểm tối thiểu, chặn phiên, chặn nến cao trào, cách thoát/TP1) trên nến OKX quá khứ,
+nhưng **chỉ tin kết quả ngoài mẫu**: mỗi lượt chọn bộ tốt nhất trên 30 ngày rồi chấm trên 10 ngày *tiếp theo* chưa dùng để
+chọn, trượt dần tới hết dữ liệu. Dùng đúng `strategy.evaluate()` và `exits.simulate()` của bot (chỉ báo tính sẵn 1 lần cho
+cả chuỗi để nhanh). Cần `numpy` (chỉ cho công cụ này, bot không cần).
+
+```bash
+pip install numpy
+python tools/walkforward.py fetch    --days 90 --coins 40 --data tools/wf_data   # ≈ 25 phút (nến 1h, 15m, 5m)
+python tools/walkforward.py events   --data tools/wf_data                          # ≈ 1 phút, 4 nhân
+python tools/walkforward.py optimize --data tools/wf_data --out tools/wf_out       # ≈ vài phút
+```
+
+Kết quả (`--out`): `tong_hop.json` (tổng hợp), `walk_forward_folds.csv` (từng lượt: bộ được chọn, kết quả huấn luyện và
+ngoài mẫu so với mặc định), `do_nhay_tham_so.csv` (đổi từng tham số quanh mặc định, chia 2 nửa thời gian),
+`phan_tich_mac_dinh.csv` (tham số mặc định theo hướng, tuần, trigger, giờ, điểm, luật, coin, cách thoát),
+`lenh_ngoai_mau_*.csv` (lệnh mô phỏng danh mục ngoài mẫu), `tin_hieu_ung_vien.csv.gz` (mọi tín hiệu ứng viên kèm giá trị
+từng cổng và R theo từng cách thoát – tự lọc trên Excel/Google Sheets).
+
+Giới hạn: không có tin tức và dòng tiền (OI, funding, long/short) lịch sử → chỉ tối ưu phần kỹ thuật; danh sách coin là top
+volume hiện tại (thiên lệch sống sót); EMA200 tính trên toàn chuỗi (bot tính trên 220 nến); mô phỏng danh mục dùng 1R/lệnh,
+tối đa 2 lệnh mở, mỗi coin chờ 2h sau khi vào.
+
 ## Đánh giá Kronos trên tín hiệu của bot
 
 [Kronos](https://github.com/shiyu-coder/Kronos) là mô hình nền tảng dự báo nến (MIT). Hai script này kiểm tra xem nó có

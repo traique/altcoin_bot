@@ -24,13 +24,12 @@ def _secret_values():
         from .config import cfg
     except Exception:
         return []
-    keys = ("TELEGRAM_TOKEN", "OPENROUTER_API_KEY", "NINEROUTER_API_KEY", "CUSTOM_API_KEY", "OKX_API_SECRET",
-            "OKX_PASSPHRASE", "OKX_API_KEY", "ZOOM_CLIENT_SECRET", "ZOOM_SECRET_TOKEN", "ZOOM_WEBHOOK_TOKEN",
-            "ZOOM_VERIFICATION_TOKEN", "DASHBOARD_PASS")
+    keys = ("TELEGRAM_TOKEN", "OKX_API_SECRET", "OKX_PASSPHRASE", "OKX_API_KEY", "ZOOM_CLIENT_SECRET",
+            "ZOOM_SECRET_TOKEN", "ZOOM_WEBHOOK_TOKEN", "ZOOM_VERIFICATION_TOKEN", "DASHBOARD_PASS")
     out = []
     for k in keys:
         v = str(getattr(cfg, k, "") or "")
-        if len(v) >= 6 and v not in ("9router",):
+        if len(v) >= 6:
             out.append(v)
     return sorted(set(out), key=len, reverse=True)
 

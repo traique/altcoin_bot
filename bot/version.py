@@ -16,13 +16,41 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "3.2.0"
-RELEASED = "2026-10-28"
-RELEASE_BUILD = "380dfca"          # ghi bởi `python -m bot.version --stamp`
+VERSION = "4.2.2"
+RELEASED = "2026-11-05"
+RELEASE_BUILD = "b0bcfb6"          # ghi bởi `python -m bot.version --stamp`
 BUILD = RELEASED                   # tương thích các chỗ cũ dùng BUILD
 
 # Mới nhất ở trên: (phiên bản, ngày, các thay đổi – câu ngắn, đọc tốt trên điện thoại)
 NOTES = (
+    ("4.2.2", "2026-11-05", (
+        "Chạy thật: lệnh đóng trên sàn bị lỗi thì KHÔNG ghi là đã đóng nữa – lệnh vẫn được theo dõi và lượt sau thử đóng lại (bản cũ ghi đóng dù vị thế còn trên sàn)",
+        "Đóng lệnh vì tin xấu bị lỗi (mất giá, sàn từ chối) → thử lại sau 2 phút thay vì bỏ qua luôn",
+    )),
+    ("4.2.1", "2026-11-05", (
+        "Deploy thẳng từ GitHub như repo Stockvn: GitHub Actions chạy test, tạo gói rồi đẩy lên nhánh 'botkeep' – Botkeep trỏ vào nhánh này",
+        "RESET_DATA=<mã>: xoá toàn bộ dữ liệu một lần khi khởi động để bắt đầu lại từ đầu (không xoá khi chạy thật còn lệnh mở)",
+    )),
+    ("4.2.0", "2026-11-05", (
+        "Bỏ điểm trừ 'xu hướng 1h đã chạy lâu' (ADX 1h ≥ 35) của v3.2 – rút từ 5 ngày; kiểm chứng 89 ngày × 40 coin: kỳ vọng mỗi tín hiệu tốt hơn ở cả hai nửa (+0,15/−0,03R so với +0,07/−0,05R)",
+        "Luật late_trend vẫn trong danh mục để bộ tự học tự chặn khi nhóm này lỗ rõ; LATE_TREND_PENALTY=1 để trừ điểm lại như cũ",
+    )),
+    ("4.1.0", "2026-11-05", (
+        "Bộ tự học chỉnh được ngưỡng 10 cổng lọc (ADX, ATR, volume, cách EMA21, nhịp 1h, BTC, RSI, nến, SL): theo dõi bóng cả tín hiệu trượt đúng 1 cổng sát ngưỡng – trước đây tín hiệu bị loại ở cổng không được ghi",
+        "Lớp bảo vệ kiểu freqtrade: khoá 1 phía 6h sau 3 lệnh thua/12h hoặc khi ≥80% tín hiệu cùng phía chạm SL trước khi lời 1R; coin vừa thua nghỉ 6h; bỏ coin niêm yết < 10 ngày",
+        "Tín hiệu bị lớp bảo vệ chặn vẫn được theo dõi bóng → báo cáo ngày cho biết bảo vệ đang cứu hay làm mất lãi",
+        "Công cụ tối ưu walk-forward trên nến lịch sử OKX (tools/walkforward.py) dùng đúng code chấm tín hiệu và thoát lệnh của bot",
+    )),
+    ("4.0.0", "2026-11-05", (
+        "Bỏ hoàn toàn AI khỏi quyết định mua bán: vào lệnh thuần kỹ thuật + dòng tiền + tin tức, không cần key 9Router/OpenRouter",
+        "Tin tức miễn phí, không cần key: 10 trang RSS crypto, thông báo niêm yết/huỷ niêm yết OKX & Binance, Fear & Greed – chấm bằng từ điển + luật sự kiện",
+        "Tin của coin cộng/trừ tối đa ±1,5 điểm × trọng số tin; chặn sẵn: coin bị huỷ niêm yết, long khi có tin hack, short khi vừa niêm yết sàn lớn",
+        "Lệnh đang mở gặp tin hack / huỷ niêm yết MỚI (short: tin niêm yết) → tự đóng và báo",
+        "Rủi ro co giãn theo tin tức (0,5–1,5× tuỳ trọng số tin) thay cho hệ số AI",
+        "Bộ tự học tự nâng cấp: đo tin cùng/ngược chiều (kiểm định Welch) để chỉnh trọng số tin 0–2, thống kê theo tin & Fear/Greed, chống học nhiễu khi thử ~30 nhóm (Benjamini–Hochberg)",
+        "Chỉ quét crypto thật: loại cổ phiếu/hàng hoá token hoá theo phân loại OKX (trước đây 15/50 cặp được quét là cổ phiếu, dầu)",
+        "Tổng kết lệnh & báo cáo ngày theo số liệu (không AI); web có trang Tin tức & Tự học; lệnh news/tintuc, tongket",
+    )),
     ("3.2.0", "2026-10-28", (
         "Rút từ 211 tín hiệu bóng 23–27/10: cổng mới không đánh ngược nhịp 1h của coin (short khi vừa tăng ≥0.5%/1h: -0.72R, thắng 18%)",
         "Volume cao trào ≥1.5× và ADX 1h ≥35 bị TRỪ điểm thay vì cộng; chặn sẵn phiên 13h–19h VN và nến cao trào; cổng BTC 0.3%",

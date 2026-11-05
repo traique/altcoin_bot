@@ -1,4 +1,4 @@
-"""Vòng lặp chính của bot."""
+"""Vòng lặp chính của bot – v4.0: quyết định thuần kỹ thuật + tin tức, KHÔNG dùng AI."""
 import logging
 import os
 import signal
@@ -7,25 +7,27 @@ import threading
 import time
 import datetime as dt
 import traceback
+from collections import Counter
 
 from .config import cfg, ENV_FILE_INFO
 from .version import VERSION, BUILD
 from . import version as ver
 from .channels import Switches
-from .learner import current_veto_conf
 from .exchange import OKX
 from .storage import Store
-from .ai import AIFilter
 from .engine import PaperEngine, LiveEngine
 from .risk import CircuitBreaker
 from .strategy import diagnose
-from collections import Counter
 from .telegram import Telegram
 from .notify import Notifier, Zoom
 from .dashboard import start_dashboard
 from .learner import Learner
+from .news import NewsHub, EVENT_NAMES
+from .review import review_trade
+from .protections import Protections
 from . import eventlog
 from . import market as mkt
+from . import news as newsmod
 from . import strategy as strat
 
 logging.basicConfig(
@@ -35,18 +37,35 @@ logging.basicConfig(
 )
 log = logging.getLogger("main")
 
+SRC_SHORT = {"taken": "✅ vào lệnh", "unfilled": "⛔ sàn/ngân sách từ chối", "not_taken": "xếp sau",
+             "blocked": "🚫 luật chặn", "below_score": "suýt đạt", "gate_near": "suýt qua cổng",
+             "protected": "🛡️ lớp bảo vệ",
+             # dữ liệu trước v4.0
+             "ai_rejected": "AI từ chối (cũ)", "ai_weak": "AI chưa chắc (cũ)", "ai_override": "vượt AI (cũ)",
+             "ai_error": "AI lỗi (cũ)", "not_sent": "không gửi AI (cũ)"}
+
+
+def _ago(ts):
+    if not ts:
+        return "chưa"
+    m = int((time.time() - float(ts)) / 60)
+    return "vừa xong" if m < 1 else f"{m} phút trước" if m < 60 else f"{m // 60} giờ trước"
+
 
 class Bot:
+    NEWS_EXIT_RETRY_S = 120     # đóng lệnh theo tin xấu bị lỗi → thử lại sau chừng này giây
+
     def __init__(self):
         self.started_at = time.time()
+        self.booting = True
         self.store = Store()
         self.switches = Switches(self.store)
         eventlog.install(self.store)   # mọi log INFO trở lên được ghi vào DB → xem trên web, tải về
         self.learner = None
+        self.news = None
         self.is_leader = False
         self.instance = cfg.INSTANCE_NAME
         self.last_prices = {}
-        self.ai = None
         start_dashboard(self)          # mở cổng web ngay lập tức để host không báo "not responding"
         self.okx = OKX()
         self.tg = Telegram(self)
@@ -54,36 +73,55 @@ class Bot:
         self.notify = Notifier(self)
         self.notify.add(self.tg)
         self.notify.add(self.zoom)
-        self.ai = AIFilter(self.store)
+        self.news = NewsHub(self.store)
+        self._sync_universe()
         engine_cls = LiveEngine if cfg.MODE == "live" else PaperEngine
         self.engine = engine_cls(self.okx, self.store, self.notify.send)
         self.engine.on_close = self._on_trade_closed
-        self.learner = Learner(self.store, self.okx, self.ai, self.notify.send)
+        self.learner = Learner(self.store, self.okx, self.notify.send)
+        self.protect = Protections(self.store, self.notify.send)
         self.shadow_seen = {}   # (symbol, side) -> ts: tránh ghi trùng tín hiệu bóng
         self.last_btc = {}
+        self.last_market = {}
         self.breaker = CircuitBreaker(self.store)
         self.paused = bool(self.store.get("paused", False))
         self.last_scan = 0
         self.last_scan_summary = self.store.get("last_scan")
-        self.last_prices = {}
         self.cooldown = {}   # symbol -> time cho phép vào lại
+        self._news_exit_done = set()
+        self._news_exit_retry = {}   # "id:sự kiện" -> lúc được thử đóng lại (lần đóng trước lỗi)
         self.start_equity = self.store.get("start_equity")
         if self.start_equity is None:
             self.start_equity = self.engine.equity()
             self.store.set("start_equity", self.start_equity)
             self.store.set("peak_equity", self.start_equity)
+        self.booting = False
 
-    # ------------------------------------------------------------ AI tổng kết sau khi đóng lệnh (lần gọi thứ 2)
+    def _sync_universe(self):
+        """Danh sách mã có hợp đồng USDT-SWAP trên OKX → module tin tức nhận diện coin trong bài báo."""
+        try:
+            self.news.set_universe(self.okx.crypto_bases())
+        except Exception as e:
+            log.warning("Tin tức: chưa lấy được danh sách coin OKX (%s)", str(e)[:120])
+
+    # ------------------------------------------------------------ tổng kết lệnh (theo quy tắc, không AI)
     def _on_trade_closed(self, t, exit_, pnl, pnl_pct, reason):
-        def _run():
-            rev = self.ai.review(t, exit_, pnl, pnl_pct, reason)
-            if rev:
-                self.store.add_review(t, pnl, rev)
-                self.notify.send(f"🧠 TỔNG KẾT {t['side'].upper()} {t['symbol']} [{rev['verdict']}]\n"
-                             f"{rev['lesson']}\n#" + " #".join(rev.get("tags") or []))
-        threading.Thread(target=_run, daemon=True, name="ai-review").start()
+        if not cfg.TRADE_REVIEW:
+            return
+        try:
+            now = None
+            if self.news and self.news.enabled:
+                ctx = self.news.coin(t["symbol"].split("/")[0])
+                if ctx.get("news_n"):
+                    now = strat.news_align(t["side"], ctx)
+            rev = review_trade(t, exit_, pnl, pnl_pct, reason, news_now=now)
+            self.store.add_review(t, pnl, rev)
+            self.notify.send(f"🧾 TỔNG KẾT {t['side'].upper()} {t['symbol']} [{rev['verdict']}]\n{rev['lesson']}\n#"
+                             + " #".join(rev.get("tags") or []))
+        except Exception as e:
+            log.warning("Tổng kết lệnh lỗi: %s", e)
 
-    # ------------------------------------------------------------ text cho Telegram
+    # ------------------------------------------------------------ text cho Telegram / Zoom
     def status_text(self):
         eq = self.engine.equity(self.last_prices)
         s = self.store.stats()
@@ -94,13 +132,19 @@ class Bot:
                  f"Instances: {peers}",
                  f"Vốn: {eq:.4f} USDT (bắt đầu {self.start_equity:.2f}, {100*(eq-self.start_equity)/self.start_equity:+.1f}%)",
                  f"Lệnh: {s['trades']} | Win {s['winrate']}% | PF {s['profit_factor']}",
-                 f"AI: {self.ai.last_model or '-'} | hôm nay {self.ai.calls_today()}/{cfg.AI_MAX_CALLS_PER_DAY} lần | lỗi {self.ai.stats['fails']}"]
+                 "📰 " + ((newsmod.describe(self.news.market()) or "chưa có tin") + f" · cập nhật {_ago(self.news.last_refresh)}"
+                         if self.news and self.news.enabled else "Tin tức: tắt")]
         ls = self.last_scan_summary
         if getattr(self, "last_btc", None):
             lines.append("₿ " + mkt.describe(self.last_btc))
         if ls:
             lines.append(f"Quét cuối {dt.datetime.fromtimestamp(ls['ts']).strftime('%H:%M')}: {ls['scanned']} coin, {ls['passed']} đạt | "
                          + ", ".join(f"{k} {v}" for k, v in list(ls['reasons'].items())[:4]))
+        pr = self.protect.public() if getattr(self, "protect", None) else {}
+        for side, lk in (pr.get("sides") or {}).items():
+            lines.append(f"🛡️ Khoá {side.upper()} đến {dt.datetime.fromtimestamp(lk['until']).strftime('%H:%M')}: {lk['why']}")
+        if pr.get("pairs"):
+            lines.append("🛡️ Coin đang nghỉ: " + ", ".join(f"{s.split('/')[0]} ({v['why']})" for s, v in pr["pairs"].items()))
         for t in opens:
             p = self.last_prices.get(t["symbol"])
             upnl = self.engine._pnl(t["side"], t["entry"], p, t["notional"])[0] if p else 0
@@ -117,29 +161,41 @@ class Bot:
         rows = self.store.recent_signals(10)
         if not rows:
             return "Chưa có tín hiệu."
-        return "\n".join(f"{dt.datetime.fromtimestamp(r['ts']).strftime('%d/%m %H:%M')} {r['symbol']} {r['side']} {r['score']} → AI {r['ai_decision']} {r['ai_conf'] or ''}% {'✅' if r['taken'] else ''}" for r in rows)
+        out = []
+        for r in rows:
+            res = ""
+            if r.get("outcome") and r["outcome"] not in ("PENDING", "NODATA") and r.get("outcome_r") is not None:
+                res = f" | kết quả {r['outcome']} {r['outcome_r']:+.2f}R"
+            out.append(f"{dt.datetime.fromtimestamp(r['ts']).strftime('%d/%m %H:%M')} {r['symbol'].split('/')[0]} {r['side']} "
+                       f"điểm {r['score']} → {SRC_SHORT.get(r.get('source'), r.get('source') or '-')}{res}")
+        return "\n".join(out)
 
-    def ai_text(self):
-        st = self.ai.public_stats()
-        lines = [f"🤖 AI: {'bật' if st['enabled'] else 'tắt'} | thứ tự {', '.join(st['order'])} | hôm nay {st['calls_today']}/{st['budget']}"]
-        for m in st["models"][:10]:
-            lines.append(f"• {m['model']}: {m['calls']} gọi, {m['ok']} ok, {m['fail']} lỗi"
-                         + (f", ~{m['avg_ms']/1000:.1f}s" if m['avg_ms'] else "") + (" (đang nghỉ)" if m['cooldown'] else ""))
-        if st.get("last_result"):
-            r = st["last_result"]
-            lines.append(f"Gần nhất: {r['side'].upper()} {r['symbol']} → {r['decision']} {r['confidence']}% ({r['model']})\n{r['reason']}")
+    def news_text(self):
+        if not self.news or not self.news.enabled:
+            return "Tin tức đang tắt (NEWS_ENABLED=false)."
+        st = self.news.public()
+        bad = [k for k, v in (st.get("status") or {}).items() if not v.get("ok")]
+        lines = [f"📰 TIN TỨC | {newsmod.describe(st['market']) or 'chưa có dữ liệu'}",
+                 f"Kho {st['n']} bài · cập nhật {_ago(st['ts'])} · nguồn lỗi: {', '.join(bad) or 'không'}"]
+        if st.get("hot"):
+            lines.append("Coin được nhắc nhiều (24h): " + ", ".join(f"{c} {k} bài ({b:+.2f})" for c, k, b in st["hot"][:8]))
+        for h in st.get("headlines", [])[:8]:
+            ev = f" [{', '.join(EVENT_NAMES.get(e, e) for e in h['events'])}]" if h.get("events") else ""
+            coins = f" ({', '.join(h['coins'])})" if h.get("coins") else ""
+            lines.append(f"• {h['score']:+.2f} [{h['src']}] {h['title'][:100]}{coins}{ev}")
         return "\n".join(lines)
 
-    def lessons_text(self):
+    def reviews_text(self):
         rows = self.store.reviews(8)
         if not rows:
             return "Chưa có tổng kết nào."
         return "\n\n".join(f"{'✅' if r['pnl']>0 else '❌'} {r['side'].upper()} {r['symbol']} [{r['verdict']}]\n{r['lesson']}" for r in rows)
 
     HELP = ("Lệnh (Telegram gõ /lenh, Zoom gõ /okxbot lenh):\n"
-            "status – vốn, lệnh mở, quét gần nhất\ntrades – 10 lệnh gần nhất\nsignals – tín hiệu & quyết định AI\n"
-            "ai – lượt gọi từng model\nlearn – trạng thái tự học\napply – duyệt đề xuất tự học\n"
-            "lessons – bài học AI\nbtc – bối cảnh BTC\npause / resume – tạm dừng / tiếp tục\nclose – đóng tất cả lệnh\n"
+            "status – vốn, lệnh mở, quét gần nhất\ntrades – 10 lệnh gần nhất\nsignals – tín hiệu & kết quả\n"
+            "news (tintuc) – tâm lý thị trường, coin được nhắc nhiều, tin mới\nlearn – trạng thái tự học\n"
+            "apply – duyệt đề xuất tự học\ntongket – tổng kết các lệnh gần nhất\nbtc – bối cảnh BTC\n"
+            "pause / resume – tạm dừng / tiếp tục\nclose – đóng tất cả lệnh\n"
             "phienban – phiên bản & lịch sử cập nhật\nzoomtest – gửi thử thông báo Zoom\n"
             "zoompair <jid> / zoomxoa / zoomstatus – ghép đôi Zoom (chỉ trên Telegram)")
 
@@ -163,15 +219,17 @@ class Bot:
             return f"Đã đóng {self.close_all(f'Đóng thủ công qua {source}')} lệnh."
         if cmd == "signals":
             return self.signals_text()
+        if cmd in ("news", "tintuc"):
+            return self.news_text()
         if cmd == "ai":
-            return self.ai_text()
+            return "Từ v4.0 bot không dùng AI để quyết định – chỉ kỹ thuật + tin tức.\n\n" + self.news_text()
         if cmd == "learn":
             return self.learn_text()
         if cmd == "apply":
             n = self.learner.apply_pending()
             return f"Đã áp dụng {n} đề xuất tự học." if n else "Không có đề xuất nào đang chờ."
-        if cmd == "lessons":
-            return self.lessons_text()
+        if cmd in ("tongket", "reviews", "lessons"):
+            return self.reviews_text()
         if cmd in ("zoompair", "zoomxoa", "zoomstatus"):
             if source == "Zoom":
                 return "Lệnh ghép đôi Zoom chỉ dùng được từ Telegram."
@@ -209,12 +267,11 @@ class Bot:
         return n
 
     def snapshot(self):
-        if self.ai is None:
+        if self.booting or self.learner is None:
             return {"mode": cfg.MODE, "paused": False, "halted": False, "instance": self.instance, "is_leader": False,
                     "leader": None, "instances": [], "shared_db": self.store.pg, "equity": 0, "start": 0,
                     "stats": self.store.stats(), "curve": [], "open": [], "trades": [], "signals": [],
-                    "ai_model": None, "ai_calls_today": 0, "ai_budget": cfg.AI_MAX_CALLS_PER_DAY,
-                    "ai": {"enabled": False}, "reviews": [], "tz": cfg.TIMEZONE, "ts": time.time(), "booting": True,
+                    "news": {"enabled": False}, "reviews": [], "tz": cfg.TIMEZONE, "ts": time.time(), "booting": True,
                     "learn": None, "last_scan": None, "version": VERSION, "build": BUILD}
         opens = self.store.open_trades()
         for t in opens:
@@ -228,8 +285,8 @@ class Bot:
             "equity": self.engine.equity(self.last_prices), "start": self.start_equity,
             "stats": self.store.stats(), "curve": self.store.equity_curve(),
             "open": opens, "trades": self.store.trades(100), "signals": self.store.recent_signals(40),
-            "ai_model": self.ai.last_model, "ai_calls_today": self.ai.calls_today(),
-            "ai_budget": cfg.AI_MAX_CALLS_PER_DAY, "ai": self.ai.public_stats(),
+            "news": self.news.public() if self.news else {"enabled": False},
+            "protect": self.protect.public() if getattr(self, "protect", None) else {"enabled": False},
             "reviews": self.store.reviews(30), "tz": cfg.TIMEZONE, "ts": time.time(),
             "last_scan": self.last_scan_summary,
             "learn": self.learner.public_state() if self.learner else None,
@@ -265,7 +322,17 @@ class Bot:
         pnl = sum(r["pnl"] for r in rows)
         wins = sum(1 for r in rows if r["pnl"] > 0)
         self.notify.send(f"📅 BÁO CÁO NGÀY\nLệnh: {len(rows)} | Thắng: {wins} | PnL: {pnl:+.4f} USDT\n"
-                     f"Vốn: {self.engine.equity(self.last_prices):.4f} USDT")
+                         f"Vốn: {self.engine.equity(self.last_prices):.4f} USDT")
+
+    def _add_context(self, sig, sym):
+        """Gắn tin tức của coin (trong bộ nhớ, không gọi mạng) rồi – nếu còn khả năng đạt ngưỡng – dòng tiền
+        (OI / long-short / funding: 4 request), cộng điểm và xét lại ngưỡng. Trả về lý do loại ('' nếu đạt)."""
+        if self.news and self.news.enabled:
+            sig.context.update(self.news.coin(sym.split("/")[0]))
+        nd, _ = strat.news_adjust(sig)
+        if sig.score + nd + 1.0 >= strat.min_score_for(sig):          # dòng tiền cộng tối đa +1.0
+            sig.context.update(mkt.symbol_context(self.okx, sym))
+        return strat.apply_context(sig)
 
     def scan(self):
         opens = self.store.open_trades()
@@ -275,29 +342,49 @@ class Bot:
         coins = self.okx.top_altcoins(cfg.TOP_N_COINS)
         btc = mkt.btc_context(self.okx)
         self.last_btc = btc
-        log.info("Quét %d coin... %s", len(coins), mkt.describe(btc))
+        self._sync_universe()
+        market = dict(btc)
+        if self.news and self.news.enabled:
+            market.update(self.news.market())          # tâm lý tin tức toàn thị trường + Fear & Greed
+        self.last_market = market
+        log.info("Quét %d coin... %s%s", len(coins), mkt.describe(btc),
+                 (" | " + newsmod.describe(market)) if self.news and self.news.enabled else "")
         candidates, reasons, near = [], Counter(), []
+        side_locks = self.protect.refresh()                 # v4.1: lớp bảo vệ (khoá phía / coin)
+        pair_locks = self.protect.pair_locks()
         for sym, vol, chg in coins:
             if sym in open_syms or self.cooldown.get(sym, 0) > time.time():
                 continue
             try:
+                if self.protect.too_new(self.okx.market(sym)):
+                    reasons["mới niêm yết"] += 1
+                    continue
                 ltf = self.okx.ohlcv(sym, cfg.TIMEFRAME, 220)
                 htf = self.okx.ohlcv(sym, cfg.HTF_TIMEFRAME, 120)
-                sig, why, info = diagnose(sym, ltf, htf, funding=0.0, change24h=float(chg or 0), market=btc)
-                min_score = strat.LEARNED.get("min_score") or cfg.MIN_SCORE
-                if sig is not None and (not why or why.startswith("điểm thấp")) and sig.score >= min_score - 1.0:
-                    # qua cổng + có trigger → lấy dòng tiền (OI / long-short / funding) và cộng/trừ điểm
-                    # TRƯỚC khi xét ngưỡng & xếp hạng → ứng viên gửi AI tốt cả kỹ thuật lẫn dòng tiền
-                    sig.context.update(mkt.symbol_context(self.okx, sym))
-                    why = strat.apply_flow(sig)
+                sig, why, info = diagnose(sym, ltf, htf, funding=0.0, change24h=float(chg or 0), market=market)
+                if sig is not None and why.startswith(strat.NEAR_PREFIX):
+                    # v4.1: trượt đúng 1 cổng, sát ngưỡng → theo dõi bóng để bộ tự học biết có nên nới cổng
+                    self._shadow(sig, "gate_near")
+                    reasons[why[len(strat.NEAR_PREFIX):].split("(")[0].strip()] += 1
+                    continue
+                if sig is not None and (not why or why.startswith("điểm thấp")):
+                    # qua cổng + có trigger → cộng điểm dòng tiền + tin tức TRƯỚC khi xét ngưỡng & xếp hạng
+                    why = self._add_context(sig, sym)
                     info["score"] = sig.score
                 if sig and not why:
                     blk = strat.blocked_by(sig)
                     if blk:
-                        sig.rejected = f"luật tự học: {blk}"
-                        reasons["luật tự học chặn"] += 1
-                        log.info("%s %s bị luật tự học chặn: %s", sym, sig.side, blk)
+                        sig.rejected = f"luật chặn: {blk}"
+                        reasons["luật chặn"] += 1
+                        log.info("%s %s bị luật chặn: %s", sym, sig.side, blk)
                         self._shadow(sig, "blocked")
+                        continue
+                    pblk = self.protect.blocks(sig, side_locks, pair_locks)
+                    if pblk:
+                        sig.rejected = f"lớp bảo vệ: {pblk}"
+                        reasons["lớp bảo vệ"] += 1
+                        log.info("%s %s bị lớp bảo vệ chặn: %s", sym, sig.side, pblk)
+                        self._shadow(sig, "protected")
                         continue
                     candidates.append(sig)
                 else:
@@ -322,76 +409,25 @@ class Bot:
             self.store.add_scan(self.last_scan_summary)
         except Exception as e:
             log.debug("add_scan: %s", e)
-        k = max(1, cfg.AI_CANDIDATES_PER_SCAN)
-        for sig in candidates[k:]:          # đạt nhưng xếp sau → không hỏi AI, vẫn theo dõi kết quả
-            self._shadow(sig, "not_sent")
-
-        for sig in candidates[:k]:          # hỏi AI lần lượt tối đa k ứng viên tốt nhất; vào được 1 lệnh thì dừng
-            log.info("Gửi AI: %s %s điểm %s | %s", sig.symbol, sig.side, sig.score, mkt.describe(sig.context))
-            ai = self.ai.analyze(sig)
-            taken = False
-            if ai is None:
-                policy = cfg.AI_FAIL_POLICY or ("score" if cfg.MODE == "paper" else "skip")
-                if policy == "score" and sig.score >= cfg.AI_FAIL_MIN_SCORE:
-                    log.warning("AI không trả lời (%s) – điểm KT %s ≥ %s nên vẫn vào lệnh %s",
-                                self.ai.last_error, sig.score, cfg.AI_FAIL_MIN_SCORE, sig.symbol)
-                    ai = {"decision": sig.side.upper(), "confidence": 0, "model": "fallback-kt",
-                          "reason": f"AI lỗi – vào theo điểm kỹ thuật {sig.score}", "fallback": True}
-                else:
-                    log.warning("AI không trả lời (%s) – bỏ qua tín hiệu %s (điểm %s, cần ≥ %s để vào khi AI lỗi%s)",
-                                self.ai.last_error, sig.symbol, sig.score, cfg.AI_FAIL_MIN_SCORE,
-                                "" if policy == "score" else ", AI_FAIL_POLICY=skip")
-            if ai is None:
-                pass
-            elif ai.get("fallback"):
-                if sig.rr >= strat.min_rr_for(sig):
-                    t = self.engine.open(sig, ai)
-                    taken = t is not None
-            elif ai["decision"] == sig.side.upper() and ai["confidence"] >= cfg.AI_MIN_CONFIDENCE:
-                # SL/TP giữ nguyên theo cấu trúc ATR của strategy – AI không được chỉnh
-                if sig.rr >= strat.min_rr_for(sig):
-                    t = self.engine.open(sig, ai)
-                    taken = t is not None
-            elif ai["decision"] == sig.side.upper():
-                # AI cùng hướng nhưng chưa chắc: ≥ AI_WEAK_CONFIDENCE → vẫn vào với rủi ro giảm (risk.quality_mult),
-                # thấp hơn nữa mới bỏ. (v3.1: trên dữ liệu đã có, AI chọn lọc không tốt hơn ngẫu nhiên → bỏ lệnh = bỏ lãi)
-                if ai["confidence"] >= cfg.AI_WEAK_CONFIDENCE and sig.rr >= strat.min_rr_for(sig):
-                    log.info("AI đồng ý nhưng chưa chắc %s: %s%% < %s%% [%s] – vào với rủi ro giảm. %s", sig.symbol,
-                             ai["confidence"], cfg.AI_MIN_CONFIDENCE, ai.get("model"), ai.get("reason"))
-                    ai = dict(ai, reason=f"[AI chưa chắc {ai['confidence']}%<{cfg.AI_MIN_CONFIDENCE}%] " + str(ai.get("reason", "")),
-                              weak=True)
-                    t = self.engine.open(sig, ai)
-                    taken = t is not None
-                else:
-                    log.info("AI chưa đủ chắc %s: %s %s%% < %s%% [%s] – bỏ. %s", sig.symbol, ai["decision"], ai["confidence"],
-                             cfg.AI_WEAK_CONFIDENCE, ai.get("model"), ai.get("reason"))
-            else:
-                veto = current_veto_conf()
-                if ai["confidence"] < veto and sig.score >= cfg.AI_OVERRIDE_MIN_SCORE and sig.rr >= strat.min_rr_for(sig):
-                    # AI phản đối nhưng không đủ chắc → tín hiệu kỹ thuật mạnh vẫn được vào (bộ tự học theo dõi kết quả)
-                    log.info("AI phản đối yếu %s: %s (%s%% < ngưỡng %s%%) [%s] – điểm KT %s ≥ %s nên vẫn vào. Lý do AI: %s",
-                             sig.symbol, ai["decision"], ai["confidence"], veto, ai.get("model"), sig.score,
-                             cfg.AI_OVERRIDE_MIN_SCORE, ai.get("reason"))
-                    ai = dict(ai, reason=f"[Vượt phủ quyết yếu {ai['confidence']}%<{veto}%] " + str(ai.get("reason", "")),
-                              override=True)
-                    t = self.engine.open(sig, ai)
-                    taken = t is not None
-                else:
-                    why = (f"điểm {sig.score} < {cfg.AI_OVERRIDE_MIN_SCORE}" if ai["confidence"] < veto
-                           else f"nguy hiểm {ai['confidence']}% ≥ ngưỡng {veto}%")
-                    log.info("AI từ chối %s: %s (%s%%) [%s] (%s) – %s", sig.symbol, ai["decision"], ai["confidence"],
-                             ai.get("model"), why, ai.get("reason"))
-            if taken and ai and ai.get("override"):
-                src = "ai_override"
-            elif taken and ai and ai.get("weak"):
-                src = "ai_weak"
-            else:
-                src = "taken" if taken else ("ai_error" if ai is None or ai.get("fallback") else "ai_rejected")
-            self.store.log_signal(sig, ai, taken, source=src)
+        k = max(1, cfg.ENTRY_CANDIDATES)
+        for sig in candidates[k:]:          # đạt nhưng xếp sau → không vào, vẫn theo dõi kết quả bóng
+            self._shadow(sig, "not_taken")
+        for i, sig in enumerate(candidates[:k]):
+            dec = strat.decide(sig)
+            if dec["decision"] == "SKIP":     # không xảy ra nếu các bước trên đúng – phòng hờ
+                self._shadow(sig, "not_taken")
+                continue
+            log.info("Vào lệnh %s %s điểm %s | %s", sig.symbol, sig.side, sig.score, dec["reason"])
+            t = self.engine.open(sig, dec)
+            taken = t is not None
+            self.store.log_signal(sig, dec, taken, source="taken" if taken else "unfilled")
             self.shadow_seen[(sig.symbol, sig.side)] = time.time()
-            self.cooldown[sig.symbol] = time.time() + (3600 if not taken else 7200)
             if taken:
+                self.cooldown[sig.symbol] = time.time() + 7200
+                for rest in candidates[i + 1:k]:
+                    self._shadow(rest, "not_taken")
                 break
+            self.cooldown[sig.symbol] = time.time() + 1800     # sàn / ngân sách rủi ro từ chối → thử lại sau 30 phút
 
     def _shadow(self, sig, source):
         key = (sig.symbol, sig.side)
@@ -403,24 +439,55 @@ class Bot:
                 sig.context.update(mkt.symbol_context(self.okx, sig.symbol))
             except Exception:
                 pass
+        if "news_n" not in sig.context and self.news and self.news.enabled:
+            sig.context.update(self.news.coin(sig.symbol.split("/")[0]))
         try:
             self.store.log_signal(sig, None, False, source=source)
         except Exception as e:
             log.debug("shadow log: %s", e)
 
+    def _news_guard(self):
+        """Lệnh đang mở gặp tin xấu MỚI (đăng sau lúc vào lệnh): long – huỷ niêm yết / hack; short – niêm yết sàn lớn
+        → đóng ngay (NEWS_EXIT_EVENTS). Mỗi lệnh × sự kiện chỉ xử lý 1 lần, và chỉ ghi "đã xử lý" khi đóng XONG:
+        lấy giá lỗi / sàn từ chối lệnh đóng → lệnh vẫn mở, thử lại sau NEWS_EXIT_RETRY_S giây."""
+        if not cfg.NEWS_EXIT_EVENTS or not self.news or not self.news.enabled:
+            return
+        now = time.time()
+        for t in self.store.open_trades():
+            bad = self.news.adverse_events(t["symbol"].split("/")[0], t["side"], float(t["opened_at"]), cfg.NEWS_EXIT_EVENTS)
+            if not bad:
+                continue
+            ev, _, title = bad[0]
+            key, name = f"{t['id']}:{ev}", EVENT_NAMES.get(ev, ev)
+            if key in self._news_exit_done or now < self._news_exit_retry.get(key, 0):
+                continue
+            try:
+                price = self.okx.price(t["symbol"])
+                log.warning("%s %s: tin %s mới – đóng lệnh. %s", t["side"].upper(), t["symbol"], name, title)
+                self.engine.close(t, price, f"Tin xấu: {name}")
+            except Exception as e:
+                self._news_exit_retry[key] = now + self.NEWS_EXIT_RETRY_S
+                log.error("Đóng lệnh %s theo tin %s lỗi – thử lại sau %ds: %s", t["symbol"], name, self.NEWS_EXIT_RETRY_S, e)
+                continue
+            self._news_exit_done.add(key)
+            self._news_exit_retry.pop(key, None)
+            self.notify.send(f"📰 Đã đóng {t['side'].upper()} {t['symbol']} vì tin {name}:\n{title}")
+
     def learn_text(self):
         st = self.learner.public_state()
         p, s = st["params"], st.get("stats") or {}
         lines = [f"🧬 TỰ HỌC | chế độ {st['mode']} | cần ≥{st['min_samples']} mẫu",
-                 f"Ngưỡng điểm: {p['min_score']} (mặc định {p['min_score_default']})",
+                 f"Ngưỡng điểm: {p['min_score']} (mặc định {p['min_score_default']}) | trọng số tin tức: {p['news_w']} "
+                 f"(mặc định {p['news_w_default']})",
                  "Luật đang chặn: " + (", ".join(st['rules'][b] for b in p['blocks']) or "không"),
                  "Trọng số trigger: " + (", ".join(f"{st['trigger_names'].get(k,k)} {v}" for k, v in p['trigger_w'].items()) or "mặc định")]
         if s:
             t = s.get("tech", {})
             lines.append(f"Đã có kết quả {s['total']['n']} tín hiệu, đang chờ {s.get('pending', 0)} | tín hiệu kỹ thuật: kỳ vọng {t.get('exp_r', 0):+.2f}R, thắng {t.get('winrate', 0)}%")
-            av = s.get("ai_veto") or {}
-            if av.get("veto_accuracy") is not None:
-                lines.append(f"AI chặn đúng {av['veto_accuracy']}% ({av['rejected']['n']} lần)")
+            ne = s.get("news_effect") or {}
+            if ne.get("n_aligned") or ne.get("n_against"):
+                lines.append(f"Tin cùng chiều {ne.get('exp_aligned', 0):+.2f}R ({ne.get('n_aligned', 0)} mẫu) vs ngược chiều "
+                             f"{ne.get('exp_against', 0):+.2f}R ({ne.get('n_against', 0)} mẫu), t = {ne.get('t', 0)}")
         pend = [r for r in st["log"] if r["status"] == "pending"]
         if pend:
             lines.append(f"⏳ {len(pend)} đề xuất chờ duyệt – gõ /apply để áp dụng tất cả")
@@ -450,8 +517,7 @@ class Bot:
         if self.is_leader and not was:
             log.info("[%s] trở thành LEADER", self.instance)
             if self.learner:   # nạp lại tham số tự học mới nhất (có thể do instance khác vừa cập nhật)
-                from . import strategy
-                strategy.LEARNED.update(self.store.get("learned") or {})
+                strat.LEARNED.update(self.store.get("learned") or {})
             self.notify.send(f"👑 {self.instance} tiếp quản vai trò giao dịch (chế độ {cfg.MODE.upper()}).")
         elif was and not self.is_leader:
             log.warning("[%s] mất khoá leader -> chuyển sang standby", self.instance)
@@ -459,6 +525,7 @@ class Bot:
 
     def run(self):
         self.tg.start()
+        self.news.start(is_leader=lambda: self.is_leader)
         threading.Thread(target=self._keepalive, daemon=True, name="keepalive").start()
         fi = ENV_FILE_INFO
         if fi.get("path"):
@@ -468,18 +535,20 @@ class Bot:
             log.warning("File cấu hình lỗi, không nạp được: %s", fi["error"])
         L = strat.LEARNED
         from . import exits as _ex
-        # giá trị THỰC đang dùng (tự học ghi đè mặc định) – bản cũ in mặc định gây hiểu nhầm
+        # giá trị THỰC đang dùng (tự học ghi đè mặc định)
         log.info("Thông số đang dùng: MIN_SCORE=%s MIN_ADX=%s HTF_MIN_ADX=%s MAX_EXT_ATR=%s BTC_GATE=%s%% CHASE_1H=%s%% "
-                 "CLIMAX_VOL=%s LATE_ADX=%s SL=%s–%sATR TP1_R=%s "
-                 "RISK=%.1f%% (×%.2f–%.2f theo AI, trần tổng %.0f%%, tối đa %d lệnh) TOP_N=%s AI_MIN_CONF=%s/%s "
-                 "AI_VETO=%s%% HỌC≥%s mẫu,t≥%s CHẶN=%s", L.get("min_score") or cfg.MIN_SCORE, cfg.MIN_ADX, cfg.HTF_MIN_ADX,
-                 cfg.MAX_EXT_ATR, cfg.BTC_GATE_CHG, cfg.CHASE_1H_PCT, cfg.CLIMAX_VOL, cfg.LATE_TREND_ADX,
+                 "CLIMAX_VOL=%s LATE_ADX=%s(trừ %s) SL=%s–%sATR TP1_R=%s "
+                 "RISK=%.1f%% (×%.2f–%.2f theo tin tức, trần tổng %.0f%%, tối đa %d lệnh) TOP_N=%s "
+                 "TIN: %s, trọng số %s × ±%s điểm, làm mới %s phút, đóng lệnh khi tin [%s] | HỌC≥%s mẫu,t≥%s CHẶN=%s",
+                 L.get("min_score") or cfg.MIN_SCORE, cfg.MIN_ADX, cfg.HTF_MIN_ADX,
+                 cfg.MAX_EXT_ATR, cfg.BTC_GATE_CHG, cfg.CHASE_1H_PCT, cfg.CLIMAX_VOL, cfg.LATE_TREND_ADX, cfg.LATE_TREND_PENALTY,
                  cfg.ATR_SL_MULT, cfg.MAX_SL_ATR, _ex.current_tp1_r(), cfg.RISK_PER_TRADE * 100,
                  cfg.RISK_MIN_MULT, cfg.RISK_MAX_MULT, cfg.MAX_TOTAL_RISK * 100, cfg.MAX_OPEN_POSITIONS, cfg.TOP_N_COINS,
-                 cfg.AI_MIN_CONFIDENCE, cfg.AI_WEAK_CONFIDENCE, current_veto_conf(), cfg.LEARN_MIN_SAMPLES, cfg.LEARN_MIN_T,
+                 "bật" if cfg.NEWS_ENABLED else "TẮT", strat.news_weight(), cfg.NEWS_SCORE_MAX, cfg.NEWS_REFRESH_MIN,
+                 ",".join(cfg.NEWS_EXIT_EVENTS) or "-", cfg.LEARN_MIN_SAMPLES, cfg.LEARN_MIN_T,
                  ",".join(sorted(strat.active_blocks())) or "-")
         log.info("Tự học đã đổi so với mặc định: %s",
-                 ", ".join(f"{k}={v}" for k, v in L.items() if v not in (None, [], {})) or "chưa có")
+                 ", ".join(f"{k}={v}" for k, v in L.items() if k != "schema" and v not in (None, [], {})) or "chưa có")
         log.info("Phiên bản %s · bản dựng %s · %s | Instance %s | storage %s | leader TTL %ss", VERSION, ver.build(),
                  ver.status_line(), self.instance, "Postgres" if self.store.pg else "SQLite", cfg.LEADER_TTL)
         last_eq_log = 0
@@ -499,11 +568,17 @@ class Bot:
                         self.store.set("last_version", cur)
                     except Exception as e:
                         log.debug("update notice: %s", e)
+                    if getattr(self.store, "reset_done", ""):
+                        self.notify.send(f"🧹 Đã xoá toàn bộ dữ liệu cũ (RESET_DATA={self.store.reset_done}) – bắt đầu lại "
+                                         f"từ đầu với vốn {self.engine.equity():.2f} USDT. Khởi động lại sẽ không xoá nữa "
+                                         f"(đổi giá trị RESET_DATA để xoá lần nữa).")
                     self.notify.send(f"🚀 Bot v{VERSION} khởi động – chế độ {cfg.MODE.upper()} | vốn {self.engine.equity():.2f} USDT | x{cfg.LEVERAGE} | "
-                                     f"rủi ro {cfg.RISK_PER_TRADE*100:.1f}%/lệnh (co giãn theo chất lượng), tối đa {cfg.MAX_TOTAL_RISK*100:.0f}% tổng")
+                                     f"rủi ro {cfg.RISK_PER_TRADE*100:.1f}%/lệnh (co giãn theo tin tức), tối đa {cfg.MAX_TOTAL_RISK*100:.0f}% tổng | "
+                                     f"quyết định: kỹ thuật + tin tức (không AI)")
                 self.paused = bool(self.store.get("paused", False))
-                # 1. quản lý lệnh đang mở
+                # 1. quản lý lệnh đang mở (SL/TP/trailing) + đóng lệnh khi có tin xấu mới
                 self.engine.monitor()
+                self._news_guard()
                 opens = self.store.open_trades()
                 if opens:
                     self.last_prices.update(self.okx.prices([t["symbol"] for t in opens]))
@@ -516,7 +591,7 @@ class Bot:
                 if self._risk_ok(equity) and not self.paused and time.time() - self.last_scan > cfg.SCAN_INTERVAL:
                     self.last_scan = time.time()
                     self.scan()
-                # 3. tự học: cập nhật kết quả bóng, điều chỉnh tham số, AI tổng kết ngày
+                # 3. tự học: cập nhật kết quả bóng, điều chỉnh tham số, báo cáo ngày
                 self.learner.tick()
             except (KeyboardInterrupt, SystemExit):
                 break

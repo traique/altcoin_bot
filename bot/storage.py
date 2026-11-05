@@ -1,7 +1,7 @@
 """Lưu trữ: SQLite (1 instance) hoặc PostgreSQL dùng chung (nhiều instance: Render + Botkeep).
 
 Đặt DATABASE_URL=postgres://... (Neon / Supabase / Render Postgres free) để 2 instance thấy cùng một dữ liệu:
-số dư ảo, lệnh đang mở, lịch sử, bài học AI, và KHOÁ LEADER (chỉ 1 instance được giao dịch tại một thời điểm).
+số dư ảo, lệnh đang mở, lịch sử, tổng kết lệnh, tham số tự học, và KHOÁ LEADER (chỉ 1 instance được giao dịch tại một thời điểm).
 """
 import json
 import logging
@@ -81,11 +81,36 @@ class _DB:
 
 
 class Store:
+    TABLES = ("trades", "equity", "kv", "signals", "reviews", "events", "scans", "learn_log", "locks", "heartbeats")
+
     def __init__(self):
         self.db = _DB(cfg.DATABASE_URL)
         self.pg = self.db.pg
         self._init()
+        self.reset_done = self._maybe_reset()
         log.info("Storage: %s", "PostgreSQL dùng chung" if self.pg else "SQLite cục bộ")
+
+    def _maybe_reset(self):
+        """RESET_DATA=<mã bất kỳ> (vd 2026-11-05): xoá TOÀN BỘ dữ liệu một lần rồi bắt đầu lại (vốn ảo, lệnh, tín hiệu,
+        tham số tự học, nhật ký…). Mã đã dùng được ghi lại → khởi động lại không xoá nữa; đổi mã để xoá lần nữa.
+        Dùng khi deploy từ GitHub (không có File Manager để xoá data/), và cả với DATABASE_URL dùng chung (xoá cả DB đó).
+        Chạy thật còn lệnh mở thì KHÔNG xoá (mất dấu vị thế trên sàn) – đóng hết lệnh trước. Trả về mã đã xoá hoặc ''."""
+        tok = (os.getenv("RESET_DATA") or "").strip()
+        if not tok or tok.lower() in ("0", "no", "false", "off"):
+            return ""
+        if self.get("reset_token") == tok:
+            return ""
+        if cfg.MODE == "live":
+            n = self.db.run("SELECT COUNT(*) AS n FROM trades WHERE status='open'", fetch=True)[0]["n"]
+            if n:
+                log.error("RESET_DATA=%s bị bỏ qua: chạy thật còn %d lệnh mở – đóng hết lệnh rồi khởi động lại", tok, n)
+                return ""
+        for t in self.TABLES:
+            self.db.run(f"DELETE FROM {t}")
+        self.set("reset_token", tok)
+        self.set("reset_at", time.time())
+        log.warning("Đã xoá toàn bộ dữ liệu (RESET_DATA=%s) – bot bắt đầu lại từ đầu", tok)
+        return tok
 
     def _init(self):
         pk = "SERIAL PRIMARY KEY" if self.pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
@@ -114,12 +139,15 @@ class Store:
                 reason TEXT, n INTEGER, exp_r {real}, status TEXT)""",
         ])
         # cột bổ sung (migration nhẹ, an toàn khi chạy lại)
+        # v4.0: decision/conf/reason thay cho ai_decision/ai_conf/ai_reason (cột ai_* giữ lại cho dữ liệu cũ)
         self._add_cols("signals", [("sid", "TEXT"), ("source", "TEXT"), ("entry", real), ("sl", real), ("tp", real),
                                    ("features", "TEXT"), ("outcome", "TEXT"), ("outcome_r", real), ("outcome_ts", real),
-                                   ("r_fixed", real), ("r_hybrid", real), ("r_trail", real), ("r_tp1v", "TEXT")])
+                                   ("r_fixed", real), ("r_hybrid", real), ("r_trail", real), ("r_tp1v", "TEXT"),
+                                   ("decision", "TEXT"), ("conf", "INTEGER"), ("reason", "TEXT"),
+                                   ("first_hit", "TEXT"), ("first_ts", real)])     # v4.1: rào ±1R chạm trước
         self._add_cols("trades", [("tp1", real), ("tp1_done", "INTEGER"), ("peak", real), ("peak_ts", real),
                                   ("realized", real), ("atr", real), ("notional0", real), ("exit_mode", "TEXT"),
-                                  ("sl0", real), ("risk_mult", real), ("tp1_ts", real)])
+                                  ("sl0", real), ("risk_mult", real), ("tp1_ts", real), ("conf", "INTEGER"), ("news", real)])
         for idx in ("CREATE INDEX IF NOT EXISTS ix_events_ts ON events(ts)",
                     "CREATE INDEX IF NOT EXISTS ix_signals_ts ON signals(ts)",
                     "CREATE INDEX IF NOT EXISTS ix_scans_ts ON scans(ts)"):
@@ -229,8 +257,10 @@ class Store:
         return [(r["ts"], r["equity"]) for r in reversed(rows)]
 
     # ---- signals
-    def log_signal(self, sig, ai, taken, source="ai"):
-        """source: taken | ai_override | ai_rejected | ai_error | not_sent | below_score | blocked"""
+    def log_signal(self, sig, dec, taken, source="taken"):
+        """source: taken | unfilled (sàn/ngân sách rủi ro không cho vào) | not_taken (xếp sau) | blocked | below_score
+        | gate_near (v4.1: trượt 1 cổng sát ngưỡng) | protected (v4.1: lớp bảo vệ khoá phía/coin).
+        Dữ liệu trước v4.0 còn các nguồn AI cũ: ai_weak, ai_override, ai_rejected, ai_error, not_sent."""
         import uuid
         feats = {k: v for k, v in (sig.context or {}).items() if k != "last_candles"}
         feats["triggers"] = list(getattr(sig, "triggers", []) or [])
@@ -239,12 +269,19 @@ class Store:
         feats["hour"] = time.localtime().tm_hour
         if getattr(sig, "rejected", ""):
             feats["rejected"] = sig.rejected
-        self.db.run("""INSERT INTO signals(ts, symbol, side, score, ai_decision, ai_conf, ai_reason, ai_model, taken,
-                       sid, source, entry, sl, tp, features, outcome) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+        self.db.run("""INSERT INTO signals(ts, symbol, side, score, decision, conf, reason, taken,
+                       sid, source, entry, sl, tp, features, outcome) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
             time.time(), sig.symbol, sig.side, sig.score,
-            (ai or {}).get("decision"), (ai or {}).get("confidence"),
-            (ai or {}).get("reason"), (ai or {}).get("model"), int(taken),
+            (dec or {}).get("decision"), (dec or {}).get("confidence"), (dec or {}).get("reason"), int(taken),
             uuid.uuid4().hex[:12], source, sig.price, sig.sl, sig.tp, json.dumps(feats, ensure_ascii=False), "PENDING"))
+
+    def set_first_hit(self, sid, hit, ts):
+        self.db.run("UPDATE signals SET first_hit=?, first_ts=? WHERE sid=?", (hit, ts, sid))
+
+    def signals_since(self, ts):
+        """Tín hiệu phát ra từ `ts` (cũ → mới) – lớp bảo vệ dùng để xem rào ±1R của các tín hiệu gần đây."""
+        return self.db.run("SELECT symbol, side, source, ts, first_hit, outcome, outcome_r FROM signals WHERE ts>=? ORDER BY ts",
+                           (ts,), fetch=True)
 
     def pending_signals(self, limit=40):
         return self.db.run("SELECT * FROM signals WHERE outcome='PENDING' AND ts < ? ORDER BY ts LIMIT ?",
@@ -329,15 +366,11 @@ class Store:
     def recent_signals(self, limit=50):
         return self.db.run("SELECT * FROM signals ORDER BY ts DESC LIMIT ?", (limit,), fetch=True)
 
-    # ---- reviews (tổng kết AI)
+    # ---- reviews (tổng kết lệnh – v4.0 theo quy tắc, trước đó do AI viết)
     def add_review(self, trade, pnl, rev):
         self.db.run("INSERT INTO reviews VALUES(?,?,?,?,?,?,?,?,?)", (
             time.time(), trade["id"], trade["symbol"], trade["side"], pnl,
             rev.get("verdict"), rev.get("lesson"), ",".join(rev.get("tags") or []), rev.get("model")))
-
-    def recent_lessons(self, n=5):
-        rows = self.db.run("SELECT symbol, side, pnl, verdict, lesson FROM reviews ORDER BY ts DESC LIMIT ?", (n,), fetch=True)
-        return [f"{r['side'].upper()} {r['symbol']} {'+' if r['pnl']>0 else ''}{r['pnl']:.2f} [{r['verdict']}]: {r['lesson']}" for r in rows]
 
     def reviews(self, limit=30):
         return self.db.run("SELECT * FROM reviews ORDER BY ts DESC LIMIT ?", (limit,), fetch=True)

@@ -76,9 +76,10 @@ class Config:
     # ---- Rủi ro ----
     LEVERAGE = _i("LEVERAGE", 10)
     # Rủi ro cơ bản 3%/lệnh (v3.1: 10% khiến 5 lệnh thua liên tiếp mất ~41% vốn – chuỗi thua như vậy là bình thường
-    # với tỉ lệ thắng 35–45%). Rủi ro thực tế còn được nhân với hệ số chất lượng (điểm KT, AI) và chuỗi thua – xem risk.py.
+    # với tỉ lệ thắng 35–45%). Rủi ro thực tế còn được nhân với hệ số tin tức (cùng/ngược chiều × trọng số tin
+    # bộ tự học đo được) và chuỗi thua – xem risk.py.
     RISK_PER_TRADE = _f("RISK_PER_TRADE", 0.03)        # % vốn mất khi chạm SL (lệnh chất lượng chuẩn)
-    RISK_MAX_MULT = _f("RISK_MAX_MULT", 1.5)           # lệnh rất đẹp (AI ≥ 80, điểm ≥ 7) được tối đa 1.5× rủi ro cơ bản
+    RISK_MAX_MULT = _f("RISK_MAX_MULT", 1.5)           # trần hệ số rủi ro (tin tức ủng hộ mạnh + trọng số tin cao)
     RISK_MIN_MULT = _f("RISK_MIN_MULT", 0.35)          # không bao giờ xuống dưới 35% rủi ro cơ bản
     LOSS_STREAK_CUT = _f("LOSS_STREAK_CUT", 0.7)       # mỗi lệnh thua liên tiếp (từ lệnh thứ LOSS_STREAK_FROM) nhân rủi ro với 0.7
     # v3.2: co từ lệnh thua thứ 3 (trước: thứ 2). 4 lệnh thua liên tiếp là bình thường với tỉ lệ thắng ~40%; co quá sớm
@@ -117,13 +118,16 @@ class Config:
         "SNDK,SOXL,SKHYNIX,SPY,QQQ,SPX,NDX,DJI,TQQQ,SQQQ,NFLX,AVGO,ORCL,TSM,ASML,GME,AMC"
     )
     EXCLUDE = [s.strip().upper() for s in os.getenv("EXCLUDE", _DEFAULT_EXCLUDE).split(",") if s.strip()]
+    # v4.0: chỉ quét hợp đồng crypto thường theo phân loại của OKX (instCategory=1, ruleType=normal, chưa có lịch gỡ).
+    # Danh sách EXCLUDE ở trên không theo kịp: 05/11/2026 có 203 hợp đồng cổ phiếu/hàng hoá không nằm trong danh sách.
+    CRYPTO_ONLY = _b("CRYPTO_ONLY", "true")
     TIMEFRAME = os.getenv("TIMEFRAME", "15m")
     HTF_TIMEFRAME = os.getenv("HTF_TIMEFRAME", "1h")
     SCAN_INTERVAL = _i("SCAN_INTERVAL", 300)           # giây giữa 2 lần quét tín hiệu
     MONITOR_INTERVAL = _i("MONITOR_INTERVAL", 20)      # giây giữa 2 lần kiểm tra SL/TP
     # v3.1: điểm 5.0 (dữ liệu 80 tín hiệu bóng: điểm 4.x–5.x không thua 6.x; chất lượng được phản ánh vào KHỐI LƯỢNG
     # thay vì chặn cứng – xem risk.quality_mult). Bộ tự học vẫn chỉnh trong 4.0–7.0.
-    MIN_SCORE = _f("MIN_SCORE", 5.0)                   # điểm hợp lưu tối thiểu để hỏi AI
+    MIN_SCORE = _f("MIN_SCORE", 5.0)                   # điểm tối thiểu (kỹ thuật + dòng tiền + tin tức) để vào lệnh
     # ---- Cổng bắt buộc của tín hiệu ----
     MIN_ADX = _f("MIN_ADX", 20)                        # ADX 15m tối thiểu (lọc sideway)
     HTF_MIN_ADX = _f("HTF_MIN_ADX", 18)                # ADX 1h tối thiểu để công nhận xu hướng
@@ -140,14 +144,22 @@ class Config:
     # v3.2: volume nến tín hiệu ≥ 1.5× trung bình là cao trào (climax), không phải xác nhận: 31 tín hiệu bóng -0.68R,
     # thắng 16% (volume < 1.5×: -0.16R). Trừ điểm thay vì cộng, và luật climax_volume chặn sẵn.
     CLIMAX_VOL = _f("CLIMAX_VOL", 1.5)
-    # v3.2: ADX 1h ≥ 35 = xu hướng đã chạy lâu, vào lúc này là vào muộn: 76 short bóng -0.44R (ADX 1h < 35: -0.22R).
+    # ADX 1h ≥ 35 = "xu hướng đã chạy lâu". v3.2 trừ 1 điểm (76 short bóng của 5 ngày: -0.44R). v4.2 BỎ điểm trừ:
+    # kiểm chứng 89 ngày × 40 coin (tools/wf_results/2026-11-05) cho thấy nhóm này đảo dấu theo giai đoạn
+    # (08–09: +0.33R, t=4.3; 10–11: -0.20R, t=-2.7) và bỏ điểm trừ tốt hơn ở CẢ HAI nửa (danh mục +8.5R so với +2.7R).
+    # Luật late_trend vẫn trong danh mục → bộ tự học tự chặn khi nhóm này lỗ rõ. Đặt LATE_TREND_PENALTY=1 để trừ lại như v3.2.
     LATE_TREND_ADX = _f("LATE_TREND_ADX", 35)
+    LATE_TREND_PENALTY = _f("LATE_TREND_PENALTY", 0)
     WICK_CLOSE_POS = _f("WICK_CLOSE_POS", 0.6)         # long: nến tín hiệu đóng >= 60% biên độ (short: <= 40%)
     # Luật chặn sẵn từ đầu (bộ tự học vẫn theo dõi bóng và tự gỡ nếu thực tế có lãi)
     # v3.1: chặn thêm phiên 0h–7h (giờ VN): 14 tín hiệu bóng chỉ thắng 1, kỳ vọng -0.89R. Bộ tự học sẽ gỡ nếu bóng có lãi.
     # v3.2: chặn thêm 13h–19h VN (06–12 UTC): lỗ ở backtest 10 ngày lẫn 5 ngày chạy ảo (-0.33..-0.76R mỗi khung 2h),
     # và nến volume cao trào (climax_volume). 14h–16h UTC (21h–23h VN, Mỹ mở cửa) là khung duy nhất có lãi rõ (+0.42R, n=27).
-    DEFAULT_BLOCKS = [x.strip() for x in os.getenv("DEFAULT_BLOCKS", "setup_range,night_session,afternoon_session,climax_volume").split(",") if x.strip()]
+    # v4.0: thêm 3 luật tin tức chặn sẵn – coin có tin huỷ niêm yết (mọi hướng), long khi có tin hack/exploit,
+    # short khi vừa có tin niêm yết sàn lớn (dễ bị ép giá). Vẫn theo dõi bóng → bộ tự học gỡ nếu thực tế có lãi.
+    DEFAULT_BLOCKS = [x.strip() for x in os.getenv(
+        "DEFAULT_BLOCKS", "setup_range,night_session,afternoon_session,climax_volume,"
+                          "news_delist,news_hack_long,news_listing_short").split(",") if x.strip()]
     # Setup RANGE: đảo chiều tại biên Bollinger khi 1h đi ngang (có lệnh cả lúc thị trường sideway)
     RANGE_ENABLED = _b("RANGE_ENABLED", "true")
     RANGE_MAX_HTF_ADX = _f("RANGE_MAX_HTF_ADX", 25)      # ADX 1h phải dưới mức này
@@ -160,49 +172,58 @@ class Config:
     RSI_LONG_MIN = _f("RSI_LONG_MIN", 45); RSI_LONG_MAX = _f("RSI_LONG_MAX", 70)
     RSI_SHORT_MIN = _f("RSI_SHORT_MIN", 30); RSI_SHORT_MAX = _f("RSI_SHORT_MAX", 55)
 
-    # ---- AI: nhiều provider OpenAI-compatible, thử theo thứ tự AI_PROVIDER_ORDER ----
-    AI_ENABLED = _b("AI_ENABLED", "true")
-    AI_PROVIDER_ORDER = [p.strip().lower() for p in os.getenv("AI_PROVIDER_ORDER", "9router,openrouter").split(",") if p.strip()]
-    # 9Router – gateway local gom nhiều provider free (npm i -g 9router → http://localhost:20128/v1)
-    NINEROUTER_BASE_URL = os.getenv("NINEROUTER_BASE_URL", "http://127.0.0.1:20128/v1").rstrip("/")
-    NINEROUTER_API_KEY = os.getenv("NINEROUTER_API_KEY", "9router")
-    NINEROUTER_MODELS = [m.strip() for m in (os.getenv("NINEROUTER_MODELS") or os.getenv("NINEROUTER_MODEL") or "").split(",") if m.strip()]
     TIMEZONE = TIMEZONE
-    # OpenRouter – model free trực tiếp
-    OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-    # "auto" (mặc định) = tự dò các model ':free' còn sống trên OpenRouter, làm mới mỗi 12h.
-    # Có thể ghi thêm model cụ thể, ví dụ: auto,google/gemma-4-31b-it:free  (model ghi tay được ưu tiên)
-    OPENROUTER_MODELS = [m.strip() for m in os.getenv("OPENROUTER_MODELS", "auto").split(",") if m.strip()]
-    OPENROUTER_MAX_MODELS = _i("OPENROUTER_MAX_MODELS", 8)
-    # Provider tuỳ ý khác (Groq, Gemini OpenAI-compatible, Ollama...) – để trống nếu không dùng
-    CUSTOM_BASE_URL = os.getenv("CUSTOM_BASE_URL", "").rstrip("/")
-    CUSTOM_API_KEY = os.getenv("CUSTOM_API_KEY", "")
-    CUSTOM_MODELS = [m.strip() for m in os.getenv("CUSTOM_MODELS", "").split(",") if m.strip()]
+    # ---- Quyết định vào lệnh (v4.0: KHÔNG dùng AI – thuần kỹ thuật + tin tức, bộ tự học kiểm chứng) ----
+    # Mỗi lượt quét thử lần lượt tối đa N ứng viên điểm cao nhất; vào được 1 lệnh thì dừng (các lệnh altcoin
+    # cùng lượt thường cùng hướng BTC → vào nhiều lệnh một lúc chỉ là nhân đôi một rủi ro).
+    ENTRY_CANDIDATES = _i("ENTRY_CANDIDATES", 3)
+    TRADE_REVIEW = _b("TRADE_REVIEW", "true")                # tổng kết (theo quy tắc) sau mỗi lệnh đóng
+    DAILY_REVIEW = _b("DAILY_REVIEW", "true")                # báo cáo tự học mỗi ngày (số liệu, không AI)
+    DAILY_REVIEW_HOUR = _i("DAILY_REVIEW_HOUR", 7)           # giờ (theo TIMEZONE)
 
-    AI_MIN_CONFIDENCE = _i("AI_MIN_CONFIDENCE", 60)   # điểm chất lượng AI (50 = tín hiệu trung bình) để duyệt
-    AI_TIMEOUT = _i("AI_TIMEOUT", 60)
-    NINEROUTER_TIMEOUT = _i("NINEROUTER_TIMEOUT", 30)       # 9router chậm thì bỏ sớm, chuyển OpenRouter
-    AI_MAX_TRIES = _i("AI_MAX_TRIES", 6)
-    AI_CANDIDATES_PER_SCAN = _i("AI_CANDIDATES_PER_SCAN", 3)  # AI từ chối ứng viên #1 thì hỏi tiếp #2, #3
-    # AI cùng hướng nhưng confidence dưới AI_MIN_CONFIDENCE (nhưng ≥ AI_WEAK_CONFIDENCE) → vẫn vào với rủi ro giảm
-    # (v3.1: thay vì bỏ hẳn – AI chọn lọc chưa tốt hơn ngẫu nhiên trên dữ liệu đã có, bỏ lệnh = bỏ lợi nhuận)
-    AI_WEAK_CONFIDENCE = _i("AI_WEAK_CONFIDENCE", 50)
-    AI_MAX_TOKENS = _i("AI_MAX_TOKENS", 1500)                # đủ chỗ cho model suy luận + JSON                     # số model tối đa thử cho 1 câu hỏi
-    # Khi TẤT CẢ model AI lỗi: skip = bỏ tín hiệu | score = vẫn vào nếu điểm KT >= AI_FAIL_MIN_SCORE
-    # Để trống: chạy ảo = score (không bỏ lỡ dữ liệu), chạy thật = skip (an toàn)
-    AI_FAIL_POLICY = (os.getenv("AI_FAIL_POLICY") or "").strip().lower()
-    AI_FAIL_MIN_SCORE = _f("AI_FAIL_MIN_SCORE", 7)
-    # Phủ quyết của AI: AI phản đối chỉ có hiệu lực khi độ chắc chắn >= AI_VETO_CONF.
-    # Phản đối "yếu" (< ngưỡng) với tín hiệu điểm KT >= AI_OVERRIDE_MIN_SCORE thì vẫn vào lệnh.
-    # Để trống: chạy ảo = 65, chạy thật = 0 (AI luôn có quyền chặn). Bộ tự học sẽ chỉnh dần.
-    AI_VETO_CONF = os.getenv("AI_VETO_CONF", "").strip()
-    AI_OVERRIDE_MIN_SCORE = _f("AI_OVERRIDE_MIN_SCORE", 6.5)
-    AI_MAX_CALLS_PER_DAY = _i("AI_MAX_CALLS_PER_DAY", 80)   # tổng cả phân tích + tổng kết (thực tế ~20–40/ngày)
-    AI_REVIEW_ENABLED = _b("AI_REVIEW_ENABLED", "true")     # gọi AI tổng kết sau mỗi lệnh đóng
-    AI_LESSONS_IN_PROMPT = _i("AI_LESSONS_IN_PROMPT", 5)    # số bài học gần nhất đưa vào prompt phân tích
-    AI_DAILY_REVIEW = _b("AI_DAILY_REVIEW", "true")          # AI tổng kết chiến lược 1 lần/ngày
-    AI_DAILY_REVIEW_HOUR = _i("AI_DAILY_REVIEW_HOUR", 7)     # giờ (theo TIMEZONE)
+    # ---- Tin tức (từ điển + luật sự kiện, không AI) ----
+    NEWS_ENABLED = _b("NEWS_ENABLED", "true")
+    # RSS miễn phí, không cần key. Định dạng: tên|url, phân tách bằng dấu phẩy (hoặc chỉ url).
+    _DEFAULT_FEEDS = (
+        "CoinDesk|https://www.coindesk.com/arc/outboundfeeds/rss/,"
+        "Cointelegraph|https://cointelegraph.com/rss,"
+        "The Block|https://www.theblock.co/rss.xml,"
+        "Decrypt|https://decrypt.co/feed,"
+        "CryptoSlate|https://cryptoslate.com/feed/,"
+        "Bitcoinist|https://bitcoinist.com/feed/,"
+        "CryptoPotato|https://cryptopotato.com/feed/,"
+        "U.Today|https://u.today/rss,"
+        "NewsBTC|https://www.newsbtc.com/feed/,"
+        "BeInCrypto|https://beincrypto.com/feed/"
+    )
+    NEWS_FEEDS = [x.strip() for x in _raw("NEWS_FEEDS", _DEFAULT_FEEDS).split(",") if x.strip()]
+    NEWS_ANNOUNCEMENTS = _b("NEWS_ANNOUNCEMENTS", "true")    # thông báo niêm yết / huỷ niêm yết của OKX + Binance
+    NEWS_FNG = _b("NEWS_FNG", "true")                        # chỉ số Fear & Greed (alternative.me)
+    NEWS_REFRESH_MIN = _f("NEWS_REFRESH_MIN", 10)            # phút giữa 2 lần tải tin
+    NEWS_TIMEOUT = _i("NEWS_TIMEOUT", 15)                    # giây tối đa cho 1 nguồn
+    NEWS_WINDOW_H = _f("NEWS_WINDOW_H", 24)                  # chỉ tính bài trong 24h gần nhất cho điểm tin của coin
+    NEWS_HALF_LIFE_H = _f("NEWS_HALF_LIFE_H", 6)             # bài 6h trước nặng bằng nửa bài vừa đăng
+    # co về 0 khi ít bài: 1 bài lẻ (dù rất mạnh) chỉ kéo độ lệch tới ~0.4; cần nhiều bài cùng chiều mới đủ mạnh
+    NEWS_SHRINK = _f("NEWS_SHRINK", 1.0)
+    NEWS_MIN_BIAS = _f("NEWS_MIN_BIAS", 0.15)                # |độ lệch tin| dưới mức này coi như không có tin
+    # Điểm cộng/trừ tối đa từ tin tức = NEWS_SCORE_MAX × trọng số tin (NEWS_WEIGHT, bộ tự học chỉnh 0–2)
+    NEWS_SCORE_MAX = _f("NEWS_SCORE_MAX", 1.5)
+    NEWS_WEIGHT = _f("NEWS_WEIGHT", 1.0)
+    # Lệnh đang mở gặp tin xấu MỚI (đăng sau lúc vào lệnh, coin nằm trong tiêu đề) → đóng ngay:
+    # long: delist, hack | short: listing. Để trống để tắt.
+    NEWS_EXIT_EVENTS = [x.strip() for x in os.getenv("NEWS_EXIT_EVENTS", "delist,hack,listing").split(",") if x.strip()]
+
+    # ---- Lớp bảo vệ (v4.1, kiểu freqtrade – xem protections.py) ----
+    PROTECT_ENABLED = _b("PROTECT_ENABLED", "true")
+    PROTECT_SIDE_LOSSES = _i("PROTECT_SIDE_LOSSES", 3)         # ≥ 3 lệnh thật cùng phía đóng lỗ …
+    PROTECT_SIDE_HOURS = _f("PROTECT_SIDE_HOURS", 12)          # … trong 12h → khoá phía đó
+    PROTECT_SHADOW_MIN = _i("PROTECT_SHADOW_MIN", 10)          # hoặc ≥ 10 coin có tín hiệu cùng phía (kể cả không vào) …
+    PROTECT_SHADOW_SL_SHARE = _f("PROTECT_SHADOW_SL_SHARE", 0.8)   # … mà ≥ 80% chạm SL trước khi lời 1R …
+    PROTECT_SHADOW_HOURS = _f("PROTECT_SHADOW_HOURS", 12)      # … trong 12h gần nhất
+    PROTECT_LOCK_HOURS = _f("PROTECT_LOCK_HOURS", 6)           # thời gian khoá phía
+    PROTECT_PAIR_LOSS_HOURS = _f("PROTECT_PAIR_LOSS_HOURS", 6)     # coin vừa thua → nghỉ 6h
+    PROTECT_PAIR_REPEAT_HOURS = _f("PROTECT_PAIR_REPEAT_HOURS", 24)  # thua 2 lần trong 24h → nghỉ tới hết 24h
+    PROTECT_MIN_AGE_DAYS = _f("PROTECT_MIN_AGE_DAYS", 10)      # bỏ hợp đồng niêm yết chưa đủ 10 ngày
 
     # ---- Tự học ----
     LEARN_MODE = os.getenv("LEARN_MODE", "").strip().lower()  # auto | suggest | off (trống: paper=auto, live=suggest)
@@ -213,6 +234,8 @@ class Config:
     LEARN_EXIT_MIN_SAMPLES = _i("LEARN_EXIT_MIN_SAMPLES", 60)  # đổi cách thoát lệnh cần ≥ 60 tín hiệu so theo cặp
     LEARN_COOLDOWN_H = _f("LEARN_COOLDOWN_H", 48)             # mỗi tham số đổi tối đa 1 lần / 48h (chống nhảy qua lại)
     LEARN_WINDOW_DAYS = _i("LEARN_WINDOW_DAYS", 21)           # chỉ học từ dữ liệu N ngày gần nhất
+    # v4.0: kiểm soát tỉ lệ phát hiện sai (Benjamini–Hochberg) khi thử ~30 luật + trigger cùng lúc; 0 = tắt
+    LEARN_FDR_Q = _f("LEARN_FDR_Q", 0.10)
 
     # ---- Telegram ----
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")

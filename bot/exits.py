@@ -119,9 +119,12 @@ class ExitState:
         return ev
 
 
-def simulate(side, entry, sl, atr, mode, t0, candles, cost_frac, max_wait_hours=None, tp1_r=None, tp_fixed=None):
+def simulate(side, entry, sl, atr, mode, t0, candles, cost_frac, max_wait_hours=None, tp1_r=None, tp_fixed=None,
+             with_time=False, bar_s=300):
     """Mô phỏng 1 tín hiệu trên nến (list [ts_ms,o,h,l,c,v]) theo cách thoát `mode`.
-    Trả về (outcome, R) – R đã trừ phí+trượt giá; None nếu chưa kết thúc."""
+    Trả về (outcome, R) – R đã trừ phí+trượt giá; None nếu chưa kết thúc.
+    with_time=True → (outcome, R, giây lúc thoát) – công cụ walk-forward dùng để mô phỏng danh mục (tối đa N lệnh mở).
+    bar_s: độ dài 1 nến (giây), mặc định nến 5m."""
     risk = abs(entry - sl)
     if risk <= 0:
         return "NODATA", 0.0
@@ -137,11 +140,11 @@ def simulate(side, entry, sl, atr, mode, t0, candles, cost_frac, max_wait_hours=
     last_close = None
     for c in candles:
         ts = c[0] / 1000
-        if ts + 300 <= t0:
+        if ts + bar_s <= t0:
             continue
         hi, lo, cl = float(c[2]), float(c[3]), float(c[4])
         last_close = cl
-        for kind, price in st.step(ts + 300, hi, lo, cl, risk):
+        for kind, price in st.step(ts + bar_s, hi, lo, cl, risk):
             if kind == "TP1":
                 realized += r_of(price) * cfg.TP1_FRACTION
                 frac = 1 - cfg.TP1_FRACTION
@@ -150,5 +153,5 @@ def simulate(side, entry, sl, atr, mode, t0, candles, cost_frac, max_wait_hours=
                 label = kind if kind != "STALL" else "TRAIL"
                 if kind == "SL" and st.tp1_done:
                     label = "TRAIL"
-                return label, round(total, 3)
-    return None, None
+                return (label, round(total, 3), ts + bar_s) if with_time else (label, round(total, 3))
+    return (None, None, None) if with_time else (None, None)

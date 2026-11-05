@@ -1,7 +1,6 @@
 """Smoke test: quét thật dữ liệu OKX public, không cần API key, không đặt lệnh."""
 import os, logging
 os.environ.setdefault("MODE", "paper")
-os.environ.setdefault("AI_ENABLED", "false")
 os.environ.setdefault("DATA_DIR", "/tmp/okx-bot-test")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 from bot.exchange import OKX

@@ -130,14 +130,14 @@ def terms_body():
     return f"""
 <h1>Điều khoản sử dụng</h1><p class="muted">Cập nhật lần cuối: {UPDATED}</p>
 <h2>1. Phạm vi</h2><p>{APP_NAME} là công cụ cá nhân để chủ ứng dụng giám sát và điều khiển bot giao dịch của chính mình qua web, Telegram và Zoom Team Chat. Chỉ người đã được chủ ứng dụng ghép đôi mới điều khiển được bot.</p>
-<h2>2. Không phải tư vấn tài chính</h2><p>Mọi tín hiệu, phân tích AI và thông báo chỉ mang tính kỹ thuật/tham khảo, không phải lời khuyên đầu tư. Giao dịch hợp đồng tương lai có đòn bẩy có rủi ro mất toàn bộ vốn; người dùng tự chịu trách nhiệm về quyết định của mình.</p>
-<h2>3. Giới hạn dịch vụ</h2><p>Dịch vụ phụ thuộc vào sàn giao dịch, Zoom, Telegram, nhà cung cấp AI và hạ tầng bên thứ ba; không đảm bảo hoạt động liên tục hoặc không có lỗi.</p>
+<h2>2. Không phải tư vấn tài chính</h2><p>Mọi tín hiệu, phân tích kỹ thuật, phân tích tin tức và thông báo chỉ mang tính tham khảo, không phải lời khuyên đầu tư. Giao dịch hợp đồng tương lai có đòn bẩy có rủi ro mất toàn bộ vốn; người dùng tự chịu trách nhiệm về quyết định của mình.</p>
+<h2>3. Giới hạn dịch vụ</h2><p>Dịch vụ phụ thuộc vào sàn giao dịch, Zoom, Telegram, các nguồn tin tức công khai và hạ tầng bên thứ ba; không đảm bảo hoạt động liên tục hoặc không có lỗi.</p>
 <h2>4. Bảo mật</h2><p>Không chia sẻ mật khẩu dashboard, API key sàn hoặc thông tin xác thực Zoom. Chủ ứng dụng có thể gỡ ghép đôi/thu hồi quyền bất cứ lúc nào.</p>
 <h2>5. Quyền riêng tư</h2><p>Xem <a href="/privacy">Chính sách quyền riêng tư</a> và <a href="/data-deletion">Hướng dẫn xoá dữ liệu</a>.</p>
 <div class="lang"><h1>Terms of Use</h1><p class="muted">Last updated: October 19, 2026</p>
 <h2>Scope</h2><p>{APP_NAME} is a personal tool that lets its owner monitor and control their own trading bot via web, Telegram and Zoom Team Chat. Only the user paired by the owner can control the bot.</p>
-<h2>No financial advice</h2><p>All signals, AI analysis and notifications are technical information only, not investment advice. Leveraged futures trading can result in total loss of capital; users are solely responsible for their decisions.</p>
-<h2>Service limitations</h2><p>The service depends on the exchange, Zoom, Telegram, AI providers and third-party hosting; continuous or error-free operation is not guaranteed.</p>
+<h2>No financial advice</h2><p>All signals, technical/news analysis and notifications are information only, not investment advice. Leveraged futures trading can result in total loss of capital; users are solely responsible for their decisions.</p>
+<h2>Service limitations</h2><p>The service depends on the exchange, Zoom, Telegram, public news sources and third-party hosting; continuous or error-free operation is not guaranteed.</p>
 <h2>Security</h2><p>Do not share dashboard passwords, exchange API keys or Zoom credentials. The owner may unpair or revoke access at any time.</p>
 <h2>Privacy</h2><p>See the <a href="/privacy">Privacy Policy</a> and <a href="/data-deletion">Data Deletion</a> instructions.</p></div>"""
 
@@ -158,8 +158,9 @@ def deletion_body():
 
 COMMANDS = [("status", "Vốn, lệnh đang mở, lượt quét gần nhất", "Balance, open positions, last scan"),
             ("trades", "10 lệnh gần nhất", "Last 10 trades"),
-            ("signals", "Tín hiệu & quyết định AI", "Signals and AI decisions"),
-            ("ai", "Lượt gọi từng model AI", "AI model usage"),
+            ("signals", "Tín hiệu & kết quả", "Signals and outcomes"),
+            ("news", "Tin tức: tâm lý thị trường, coin được nhắc nhiều", "News: market sentiment, most-mentioned coins"),
+            ("tongket", "Tổng kết các lệnh gần nhất", "Reviews of recent trades"),
             ("learn", "Trạng thái tự học", "Self-learning status"),
             ("btc", "Bối cảnh BTC", "BTC context"),
             ("pause / resume", "Tạm dừng / tiếp tục mở lệnh mới", "Pause / resume new entries"),

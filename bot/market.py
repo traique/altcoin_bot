@@ -6,7 +6,7 @@
    - Open Interest thay đổi trong 1h (có tiền mới vào hay chỉ là đóng vị thế)
    - Tỉ lệ tài khoản long/short (đám đông lệch về một phía)
    - Funding rate
-Tất cả được đưa vào ngữ cảnh tín hiệu → AI đọc được, bộ tự học dùng để thống kê/chặn.
+Tất cả được đưa vào ngữ cảnh tín hiệu → cộng/trừ điểm (OI, funding), bộ tự học dùng để thống kê/chặn.
 Lỗi API không làm hỏng tín hiệu: trường nào không lấy được thì bỏ trống.
 """
 import logging
