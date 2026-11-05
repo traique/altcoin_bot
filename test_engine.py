@@ -1,6 +1,6 @@
 """Kiểm tra PaperEngine: mở lệnh giả, ép chạm TP/SL, kiểm tra số dư cập nhật đúng."""
 import os, shutil
-os.environ["MODE"] = "paper"; os.environ["DATA_DIR"] = "/tmp/okx-engine-test"; os.environ["AI_ENABLED"] = "false"
+os.environ["MODE"] = "paper"; os.environ["DATA_DIR"] = "/tmp/okx-engine-test"; os.environ["DATABASE_URL"] = ""
 shutil.rmtree("/tmp/okx-engine-test", ignore_errors=True)
 from bot.storage import Store
 from bot.engine import PaperEngine
@@ -16,7 +16,7 @@ class FakeOKX:
 msgs = []
 st = Store(); eng = PaperEngine(FakeOKX(), st, msgs.append)
 sig = Signal("DOGE/USDT:USDT", "long", 4.0, 0.10, 0.002, 0.097, 0.106, ["test"], {})
-t = eng.open(sig, {"model": "test", "confidence": 80, "reason": "ok"})
+t = eng.open(sig, {"decision": "LONG", "confidence": 80, "reason": "điểm 4.0", "news": 0.0})
 assert t and t["notional"] <= 10 * cfg.LEVERAGE * 0.9, t
 print("Mở:", t["notional"], "USDT, ký quỹ", round(t["margin"], 3))
 eng.close(t, 0.106, "Chạm TP")

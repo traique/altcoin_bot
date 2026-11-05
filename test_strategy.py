@@ -1,5 +1,5 @@
-"""Kiểm tra các bộ lọc ưu tiên winrate (v2.8): cổng BTC, chống râu nến, SL cấu trúc,
-trigger động lượng không cộng trùng, điểm dòng tiền, mô tả nến cho AI."""
+"""Kiểm tra bộ lọc & quyết định: cổng BTC, chống râu nến, SL cấu trúc, trigger động lượng không cộng trùng,
+điểm dòng tiền, điểm & luật tin tức, quyết định thuần quy tắc (v4.0, không AI)."""
 import os, sys, random
 os.environ.setdefault("DATA_DIR", "/tmp/okx_test_strategy")
 sys.path.insert(0, os.path.dirname(__file__))
@@ -79,21 +79,44 @@ c = sig("short", oi_chg_1h=2.0, px_chg_1h=1.0); assert S.flow_adjust(c)[0] == 0 
 d = sig("long", funding=0.002); assert S.flow_adjust(d)[0] == -1.0
 print("✓ điểm dòng tiền OI/funding")
 
-# 6) mô tả nến chuẩn hoá ATR
-random.seed(1)
-t, p, rows = 0, 100.0, []
-for i in range(60):
-    o = p; p = p * (1 + random.uniform(-0.01, 0.012)); hi = max(o, p) * 1.003; lo = min(o, p) * 0.997
-    rows.append([t, o, hi, lo, p, random.uniform(100, 200)]); t += 900_000
-f = enrich(to_frame(rows))
-desc = S.describe_candles(f, f.row(-1).atr)
-assert len(desc) == 7 and desc[-2].startswith("nến -1 (tín hiệu)") and "ATR" in desc[0] and "tới đỉnh 20 nến" in desc[-1]
-print("✓ mô tả nến:", desc[-2])
+# 6) v4.0 – tin tức: điểm cộng/trừ theo hướng lệnh × trọng số tin, luật tin tức, quyết định không AI
+def nsig(side, score=5.0, **ctx):
+    return S.Signal("X/USDT:USDT", side, score, 100, 1, 98 if side == "long" else 102, 104 if side == "long" else 96, [], ctx)
+L0 = cfg.NEWS_SCORE_MAX
+d, why = S.news_adjust(nsig("long", news_bias=0.6, news_n=3, news_head="[CoinDesk] X soars"))
+assert abs(d - round(L0 * 0.6, 2)) < 1e-9 and "ủng hộ" in why[0] and "X soars" in why[0], (d, why)
+assert S.news_adjust(nsig("short", news_bias=0.6, news_n=3))[0] == -round(L0 * 0.6, 2)      # tin tốt → short bị trừ
+assert S.news_adjust(nsig("long", news_bias=0.1, news_n=3))[0] == 0                        # dưới NEWS_MIN_BIAS
+assert S.news_adjust(nsig("long", news_bias=0.9, news_n=0))[0] == 0                        # không có bài nào
+S.LEARNED["news_w"] = 0.0; assert S.news_adjust(nsig("long", news_bias=0.9, news_n=5))[0] == 0   # trọng số 0 → bỏ qua tin
+S.LEARNED["news_w"] = 2.0; assert S.news_adjust(nsig("long", news_bias=1.0, news_n=5))[0] == 2 * L0
+S.LEARNED["news_w"] = None
+g = nsig("long", score=cfg.MIN_SCORE - 0.4, news_bias=0.5, news_n=2)
+assert S.apply_context(g) == "" and g.score >= cfg.MIN_SCORE                                 # tin tốt đẩy qua ngưỡng
+b2 = nsig("long", score=cfg.MIN_SCORE + 0.3, news_bias=-0.6, news_n=4)
+assert S.apply_context(b2).startswith("điểm thấp")                                          # tin xấu kéo xuống dưới ngưỡng
+# luật tin tức
+R_ = lambda side, **c: set(S.matching_rules(side, c))
+assert "news_delist" in R_("short", news_events=["delist"]) and "news_delist" in R_("long", news_events=["delist"])
+assert "news_hack_long" in R_("long", news_events=["hack"]) and "news_hack_long" not in R_("short", news_events=["hack"])
+assert "news_listing_short" in R_("short", news_events=["listing"]) and "news_listing_short" not in R_("long", news_events=["listing"])
+assert "news_against" in R_("long", news_bias=-0.4, news_n=2) and "news_against" not in R_("short", news_bias=-0.4, news_n=2)
+assert "fng_greed_long" in R_("long", fng=80) and "fng_fear_short" in R_("short", fng=20)
+assert not ({"fng_greed_long", "fng_fear_short"} & (R_("long", fng=50) | R_("short", fng=50) | R_("long")))   # thiếu dữ liệu → không khớp
+assert "mkt_news_against" in R_("short", mkt_news=0.3) and "mkt_news_against" not in R_("long", mkt_news=0.3)
+assert {"news_delist", "news_hack_long", "news_listing_short"} <= S.active_blocks()            # chặn sẵn
+hk = nsig("long", score=6, news_events=["hack"]); assert "hack" in S.blocked_by(hk)
+# quyết định (thay AI)
+ok = nsig("long", score=cfg.MIN_SCORE + 1, news_bias=0.4, news_n=2, fng=55)
+dec = S.decide(ok)
+assert dec["decision"] == "LONG" and dec["confidence"] == 60 and dec["news"] == 0.4 and "F&G 55" in dec["reason"], dec
+assert S.decide(hk)["decision"] == "SKIP" and S.decide(nsig("long", score=cfg.MIN_SCORE - 1))["decision"] == "SKIP"
+print("✓ v4.0: điểm tin tức theo hướng lệnh × trọng số, luật tin tức chặn sẵn, quyết định không AI")
 
 # 7) luật chặn sẵn & gỡ chặn
 from bot.learner import Learner
 S.LEARNED.update({"blocks": [], "unblocked": []})
-assert {"afternoon_session", "setup_range", "night_session", "climax_volume"} <= S.active_blocks()   # mặc định v3.2
+assert {"afternoon_session", "setup_range", "night_session", "climax_volume", "news_delist"} <= S.active_blocks()   # mặc định
 S.LEARNED["blocks"] = ["short_side", "weak_adx"]
 assert "short_side" not in S.active_blocks() and "weak_adx" in S.active_blocks()   # không bao giờ chặn cả phía
 S.LEARNED["blocks"] = []

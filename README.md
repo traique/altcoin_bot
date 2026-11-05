@@ -1,47 +1,62 @@
-# OKX AI Altcoin Futures Bot
+# OKX Altcoin Futures Bot – Kỹ thuật + Tin tức (không AI)
 
-Bot giao dịch hợp đồng tương lai (USDT-SWAP) altcoin trên OKX, đánh cả Long lẫn Short. Bộ lọc kỹ thuật khắt khe tự tìm tín hiệu; AI (qua **9Router** hoặc **OpenRouter**, model free) chỉ được gọi **2 lần cho mỗi lệnh**: 1 lần xác nhận trước khi vào, 1 lần tổng kết sau khi đóng. Có chế độ **chạy ảo (paper)**, Telegram, dashboard web. Chạy được trên **Botkeep.cloud** với runtime Python (không cần Docker).
+Bot giao dịch hợp đồng tương lai (USDT-SWAP) altcoin trên OKX, đánh cả Long lẫn Short. **Từ v4.0 bot không dùng AI để quyết định mua bán**: mọi quyết định đến từ phân tích kỹ thuật, dòng tiền (OI, funding, long/short) và **phân tích tin tức theo quy tắc** (từ điển + luật sự kiện, không LLM). Bộ tự học đo kết quả thật của mọi tín hiệu và **tự nâng cấp** tham số (luật chặn, trọng số trigger, ngưỡng điểm, cách thoát, TP1, trọng số tin tức) có kiểm định thống kê. Có chế độ **chạy ảo (paper)**, Telegram, Zoom, dashboard web. Chạy được trên **Botkeep.cloud** với runtime Python (không cần Docker), không cần API key nào ngoài Telegram (và OKX khi chạy thật).
 
 > ⚠️ Future đòn bẩy với vốn nhỏ rủi ro rất cao, có thể mất toàn bộ vốn. Đây là công cụ, không phải lời khuyên đầu tư. Chỉ bật `live` sau khi đã xem kết quả 2 tuần chạy ảo.
 
 ## 1. Cách bot ra quyết định
 
-**Bước 1 – Quét**: mỗi 5 phút lấy top 25 cặp USDT-SWAP có volume 24h lớn nhất trên OKX (loại BTC, ETH, stablecoin, token hoá cổ phiếu/vàng/dầu).
+**Bước 1 – Quét**: mỗi 5 phút lấy top 50 cặp USDT-SWAP **crypto** có volume 24h lớn nhất trên OKX. v4.0 lọc theo phân loại của chính OKX (`instCategory=1`, `ruleType=normal`, chưa có lịch gỡ) – OKX đang niêm yết hơn 200 hợp đồng cổ phiếu/hàng hoá token hoá dạng USDT-SWAP, bản cũ quét nhầm 15/50 cặp là cổ phiếu, dầu. Loại thêm BTC, ETH, stablecoin (`EXCLUDE`).
 
 **Bước 2 – Cổng bắt buộc** (thiếu một cái là loại ngay, chỉ dùng nến đã đóng):
 
 | Cổng | Điều kiện |
 |---|---|
-| Xu hướng khung 1h | EMA21 so với EMA50, giá so với EMA21, DI+/DI-, ADX 1h ≥ 18. Chỉ đánh **cùng chiều** khung 1h |
-| Thị trường có xu hướng | ADX 15m ≥ 22 (lọc sideway) |
+| Xu hướng khung 1h | EMA21 so với EMA50, giá so với EMA21, ADX 1h ≥ 18. Chỉ đánh **cùng chiều** khung 1h |
+| Thị trường có xu hướng | ADX 15m ≥ 20 (lọc sideway) |
 | Đủ biến động | ATR ≥ 0.35% giá |
-| Có volume | Volume nến tín hiệu ≥ trung bình 20 nến |
-| Không đuổi giá | Giá cách EMA21 không quá 2 ATR |
-| Không ngược nhịp 1h (v3.2) | Short khi coin vừa tăng ≥ 0.5% trong 1h (long: vừa giảm) → loại. 56 tín hiệu bóng kiểu này: −0.72R, thắng 18% |
-| Cổng BTC (v3.2) | BTC đang tăng/giảm ≥ 0.3%/1h hoặc xu hướng 1h ngược → cấm short/long altcoin |
+| Có volume | Volume nến tín hiệu ≥ 70% trung bình 20 nến |
+| Không đuổi giá | Giá cách EMA21 không quá 1 ATR |
+| Không ngược nhịp 1h | Short khi coin vừa tăng ≥ 0.5% trong 1h (long: vừa giảm) → loại |
+| Cổng BTC | BTC đang tăng/giảm ≥ 0.3%/1h hoặc xu hướng 1h ngược → cấm short/long altcoin |
 | RSI hợp lý | Long: 45–70, Short: 30–55 |
-| Nến tín hiệu đúng màu | Long phải là nến tăng, Short phải là nến giảm |
+| Nến tín hiệu đúng màu, không râu dài | Long phải là nến tăng đóng ≥ 60% biên độ (short ngược lại) |
 
-**Bước 3 – Trigger** (phải có ít nhất 1 sự kiện trong 3 nến gần nhất): MACD cắt, EMA9 cắt EMA21, breakout đỉnh/đáy 20 nến kèm volume ×1.5, pullback về EMA21 rồi bật, nến nhấn chìm.
+**Bước 3 – Trigger** (ít nhất 1 sự kiện trong 3 nến gần nhất): MACD cắt, EMA9 cắt EMA21, breakout đỉnh/đáy 20 nến kèm volume ×1.5, pullback về EMA21/VWAP rồi bật, nến nhấn chìm.
 
-**Bước 4 – Chấm điểm hợp lưu**: EMA 9/21/50 xếp đúng thứ tự, đúng phía EMA200 và VWAP, ADX mạnh, MACD+RSI khung 1h đồng thuận, volume, nến đóng dứt khoát, funding; trừ điểm nếu coin đã chạy > 20% trong 24h. Cần ≥ 5 điểm và tỉ lệ lời/lỗ ≥ 1.5.
+**Bước 4 – Chấm điểm** = hợp lưu kỹ thuật (EMA 9/21/50, EMA200, VWAP, ADX, MACD+RSI 1h, nến đóng dứt khoát; trừ điểm volume cao trào, xu hướng 1h đã chạy lâu, coin đã chạy > 20%/24h) **+ dòng tiền** (OI tăng cùng giá +0.5, tiền rút −1, funding) **+ tin tức** (xem mục 1b): độ lệch tin của coin × 1.5 điểm × trọng số tin. Cần ≥ `MIN_SCORE` = 5 điểm và tỉ lệ lời/lỗ ≥ 1.5.
 
-**Bước 5 – AI lần 1 (phân tích)**: tối đa 3 **tín hiệu tốt nhất** của lượt quét được gửi lần lượt cho AI, kèm 5 bài học gần nhất. AI đồng ý ≥ 60% → vào lệnh đủ rủi ro; đồng ý nhưng chỉ 50–59% → vẫn vào với **nửa rủi ro** (`AI_WEAK_CONFIDENCE`); phản đối yếu (dưới ngưỡng phủ quyết) với tín hiệu điểm ≥ 6.5 → vào nửa rủi ro; còn lại bỏ. (v3.1: trên dữ liệu đã có, AI từ chối 90% tín hiệu nhưng nhóm bị từ chối không thua nhóm được duyệt – AI điều tiết **khối lượng** thay vì chặn cứng.)
+**Bước 5 – Luật chặn**: danh mục luật cố định (phiên giờ, BTC, OI, đám đông, funding, tin tức, Fear & Greed). Một số chặn sẵn, còn lại để bộ tự học bật/tắt theo kết quả thật. Tín hiệu bị chặn vẫn được theo dõi "bóng" để bộ tự học biết luật đó có đáng giữ không.
 
-**Bước 6 – Vào & quản lý lệnh**: SL theo cấu trúc (đáy/đỉnh 6 nến ± 0.15 ATR, tối thiểu 1.5 ATR; xa hơn 2.5 ATR thì bỏ tín hiệu). Khối lượng tính để chạm SL mất `RISK_PER_TRADE` = **3% vốn × hệ số chất lượng** (đã gồm phí + trượt giá): điểm ≥ 7 và AI ≥ 80 được 1.5×, AI chưa chắc / phản đối yếu 0.5×, mỗi lệnh thua liên tiếp (từ lệnh thứ 2) nhân 0.7, kẹp 0.35–1.5×. x10 isolated, tối đa **2 lệnh** nhưng tổng rủi ro đang mở ≤ `MAX_TOTAL_RISK` = 5% vốn; lot tối thiểu của sàn làm rủi ro vượt 2× dự tính thì bỏ tín hiệu. Thoát lệnh: hybrid (chốt 50% ở TP1 do bộ tự học chọn, phần còn lại bám sóng) hoặc cách khác mà bộ tự học chọn.
+**Bước 6 – Quyết định & vào lệnh (không AI)**: ứng viên qua hết các bước trên được xếp theo điểm; bot vào **ứng viên tốt nhất** (sàn / ngân sách rủi ro từ chối thì thử #2, #3 – `ENTRY_CANDIDATES`), tối đa 1 lệnh mới mỗi lượt quét. SL theo cấu trúc (đáy/đỉnh 6 nến ± 0.15 ATR, tối thiểu 2 ATR; xa hơn 3 ATR thì bỏ). Khối lượng để chạm SL mất `RISK_PER_TRADE` = **3% vốn × hệ số tin tức × chuỗi thua** (đã gồm phí + trượt giá): tin cùng chiều mạnh → tối đa ×1.25 (×1.5 nếu bộ tự học tăng trọng số tin), tin ngược chiều → giảm tương ứng, từ lệnh thua liên tiếp thứ 3 nhân 0.7; kẹp 0.35–1.5×. Điểm kỹ thuật **không** làm tăng rủi ro (dữ liệu v3.2: điểm cao thua nặng nhất). x10 isolated, tối đa 2 lệnh, tổng rủi ro đang mở ≤ `MAX_TOTAL_RISK` = 5% vốn.
 
-**Bước 7 – AI lần 2 (tổng kết)**: khi lệnh đóng, AI đánh giá GOOD/BAD/LUCKY/UNLUCKY và rút 1–2 câu bài học. Bài học được lưu và đưa lại vào prompt của các lần phân tích sau → bot "học" dần từ chính lịch sử của nó. Xem bằng `/lessons` hoặc trên dashboard.
+**Bước 7 – Quản lý lệnh**: hybrid (chốt 50% ở TP1 do bộ tự học chọn, phần còn lại bám sóng) hoặc cách khác bộ tự học chọn (mục 9). **Lệnh đang mở gặp tin MỚI bất lợi** (long: hack/exploit, huỷ niêm yết; short: niêm yết sàn lớn – `NEWS_EXIT_EVENTS`) → đóng ngay và báo Telegram/Zoom.
 
-**Cầu dao**: lỗ 12% vốn trong ngày (~4 lệnh thua) → nghỉ đến ngày mai; drawdown 30% từ đỉnh → dừng hẳn, chờ `/resume`. Hạn mức AI mặc định 80 lần/ngày (`AI_MAX_CALLS_PER_DAY`), hết hạn mức bot không vào lệnh mới.
+**Bước 8 – Tổng kết lệnh (theo số liệu)**: khi lệnh đóng, bot xếp lệnh vào nhóm *thắng đúng kế hoạch / thắng nhưng trả lại nhiều / thua trong kế hoạch / thua sau khi đã lời (lỗi quản lý lệnh) / sai hướng ngay (lỗi điểm vào) / đóng vì tin xấu*, kèm R, MFE, SL theo ATR, tin tức lúc vào và lúc đóng. Xem bằng `/tongket` hoặc trên dashboard.
 
-Trong lần quét thử 40 coin thật chỉ có 3 coin qua được bộ lọc, và chỉ 1 được hỏi AI → thực tế bot gọi AI khoảng 5–15 lần/ngày.
+**Cầu dao**: lỗ 12% vốn trong ngày → nghỉ đến ngày mai; drawdown 30% từ đỉnh → dừng hẳn, chờ `/resume`.
+
+### 1b. Phân tích tin tức (không AI, không cần API key)
+
+| Nguồn | Dùng để |
+|---|---|
+| RSS 10 trang tin crypto: CoinDesk, Cointelegraph, The Block, Decrypt, CryptoSlate, Bitcoinist, CryptoPotato, U.Today, NewsBTC, BeInCrypto (`NEWS_FEEDS`) | Điểm tin của từng coin, tâm lý tin tức toàn thị trường |
+| Thông báo OKX (`/api/v5/support/announcements`: niêm yết, huỷ niêm yết) và Binance (New Cryptocurrency Listing, Delisting) | Sự kiện niêm yết / huỷ niêm yết (nặng gấp đôi bài báo) |
+| Fear & Greed Index (alternative.me) | Tâm lý chung (luật để bộ tự học thống kê) |
+
+Làm mới mỗi 10 phút trên luồng nền (chỉ máy leader tải tin, máy dự phòng đọc bản lưu trong DB), mỗi nguồn tối đa 15 giây – nguồn lỗi bị bỏ qua, không ảnh hưởng giao dịch.
+
+- **Nhận diện coin**: `$SOL`, `(SOL)`, `SOL` viết hoa, tên dự án = mã (`Pendle`, `Kaito`) hoặc tên riêng (`Solana`, `Polygon`) – chỉ mã đang có hợp đồng trên OKX. Mã trùng từ thông dụng (`NEAR`, `LINK`, `MOVE`, `ONE`…) chỉ nhận khi viết dạng `$MÃ`/`(MÃ)`.
+- **Điểm cảm xúc** −1..+1: từ điển crypto (surge/rally/listing/partnership… dương; hack/exploit/delist/plunge/lawsuit… âm), đảo dấu khi có phủ định ngay trước (`not hacked`, `denies exploit`).
+- **Sự kiện** (chỉ gán cho coin đứng gần từ khoá trong tiêu đề – "hackers move stolen Solana" không phải Solana bị hack): `delist` (hiệu lực 7 ngày), `hack` (48h), `listing` (48h), `unlock`, `lawsuit`, `etf`, `partnership`, `upgrade`.
+- **Độ lệch tin của coin** (`news_bias`): trung bình có trọng số theo độ mới (bài 6h trước nặng bằng nửa), chỉ bài trong 24h, **co về 0 khi ít bài** (1 bài lẻ không đủ kéo mạnh).
+- **Cách dùng**: tin là *bộ điều chỉnh*, không phải trigger. Cộng/trừ điểm, co giãn rủi ro, 3 luật chặn sẵn (`news_delist`, `news_hack_long`, `news_listing_short`), 6 luật để bộ tự học thống kê (`news_against`, `news_hype`, `news_unlock_long`, `mkt_news_against`, `fng_greed_long`, `fng_fear_short`), và đóng lệnh khi có tin xấu mới.
+- **Trọng số tin** (`news_w`, mặc định 1.0): bộ tự học so tín hiệu có tin **cùng chiều** với tín hiệu tin **ngược chiều** (kiểm định Welch). Tin giúp chọn lệnh tốt hơn rõ rệt → tăng (tối đa 2.0); tin dự báo ngược → giảm (tối thiểu 0 = bỏ qua tin). Không ai phải tin vào từ điển: dữ liệu quyết định.
 
 ## 2. Chuẩn bị
 
 | Cần gì | Lấy ở đâu |
 |---|---|
-| 9Router (khuyên dùng) | `npm install -g 9router` rồi chạy `9router`, mở `http://localhost:20128/dashboard`, thêm provider free (Qwen, Gemini, NVIDIA NIM, OpenRouter, Cloudflare AI...). API: `http://localhost:20128/v1` |
-| OpenRouter key (dự phòng) | https://openrouter.ai/keys |
 | Telegram bot token | Chat `@BotFather` → `/newbot` |
 | Telegram chat id | Chat `@userinfobot` |
 | OKX API key (chỉ khi `live`) | OKX → Profile → API → tạo key quyền **Trade** (không bật Withdraw). Bật Futures, nạp ≥ 10 USDT vào Trading account |
@@ -57,15 +72,16 @@ Botkeep chạy app theo runtime, nhận code qua **ZIP upload** hoặc **GitHub*
 1. Tạo server mới → chọn profile **Python** (phiên bản 3.10 trở lên).
 2. Nguồn code: upload file ZIP này (hoặc đẩy lên GitHub rồi chọn repo/branch).
 3. **Start command**: `python run.py` (file này tự cài thư viện trong `requirements.txt` rồi chạy bot, tự khởi động lại nếu bot crash).
-4. **Secrets**: nhập các biến trong `.env.example` mà anh cần (tối thiểu: `MODE=paper`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `OPENROUTER_API_KEY` hoặc cấu hình 9Router, `DASHBOARD_PASS`). Hoặc tạo file `.env` trong ZIP – nhưng để key trong Secrets an toàn hơn.
+4. **Secrets**: nhập các biến trong `.env.example` mà anh cần (tối thiểu: `MODE=paper`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `DASHBOARD_PASS`). Không cần key AI nào. Nếu panel còn biến `AI_*`, `NINEROUTER_*`, `OPENROUTER_*` của bản cũ thì xoá (để lại bot cũng bỏ qua). Hoặc tạo file `.env` trong ZIP – nhưng để key trong Secrets an toàn hơn.
 5. Bấm Start, xem console: dòng `🚀 Bot khởi động – chế độ PAPER` là chạy được.
-6. Dashboard: bot mở cổng theo biến `PORT` / `SERVER_PORT` / `APP_PORT` nếu Botkeep cấp, không thì `DASHBOARD_PORT` (8080). Trong console lúc khởi động có dòng `Dashboard: http://0.0.0.0:<cổng>` – đó là cổng cần mở/expose trong panel Botkeep (mục Network/Ports nếu có). Truy cập `http://<ip-server>:<cổng>/` – có trang đăng nhập (`DASHBOARD_USER`/`DASHBOARD_PASS`, nhớ 30 ngày); để trống `DASHBOARD_PASS` nếu không muốn hỏi. Cổng web được mở ngay trong 1–2 giây đầu, trước khi bot tải dữ liệu OKX, để host không báo "not responding". Nếu Botkeep vẫn báo vậy: so sánh **assigned port** trong panel với số cổng trong dòng log `Dashboard: cổng …` – nếu khác, đặt Secret `PORT=<assigned port>`. Thử `http://<ip>:<cổng>/health` trước: trả `{"ok":true}` nghĩa là server đã chạy, chỉ còn vấn đề cổng/đường dẫn. File `botkeep.env` có sẵn danh sách biến. **Khuyên dùng:** trên panel chỉ khai các bí mật (token Telegram, key AI, Zoom, mật khẩu dashboard) cùng `MODE`, `INSTANCE_NAME`, `PUBLIC_URL`. Mọi thông số khác đã có mặc định tốt nhất trong code và tự cập nhật theo từng bản; nếu panel còn khai biến thông số thì giá trị cũ đó sẽ thắng, nên hãy xoá chúng. Trong khung `.env` của Botkeep, dòng `__BOTKEEP_KEEP_SECRET_…__` giữ nguyên để giữ giá trị; không dán dòng `<...>`. Lúc khởi động, log in dòng `Thông số đang dùng: …` để kiểm tra.
+   **Nâng cấp từ v3.x lên v4.0**: upload zip đè, rồi xoá file `bot/ai.py` cũ nếu còn (trang Phiên bản báo "khác bản phát hành" khi còn sót file cũ); giữ thư mục `data/` hoặc `DATABASE_URL` để giữ lịch sử – bot tự nâng cấp tham số tự học 1 lần (bỏ ngưỡng phủ quyết AI, giữ TP1/trọng số đã học).
+6. Dashboard: bot mở cổng theo biến `PORT` / `SERVER_PORT` / `APP_PORT` nếu Botkeep cấp, không thì `DASHBOARD_PORT` (8080). Trong console lúc khởi động có dòng `Dashboard: http://0.0.0.0:<cổng>` – đó là cổng cần mở/expose trong panel Botkeep (mục Network/Ports nếu có). Truy cập `http://<ip-server>:<cổng>/` – có trang đăng nhập (`DASHBOARD_USER`/`DASHBOARD_PASS`, nhớ 30 ngày); để trống `DASHBOARD_PASS` nếu không muốn hỏi. Cổng web được mở ngay trong 1–2 giây đầu, trước khi bot tải dữ liệu OKX, để host không báo "not responding". Nếu Botkeep vẫn báo vậy: so sánh **assigned port** trong panel với số cổng trong dòng log `Dashboard: cổng …` – nếu khác, đặt Secret `PORT=<assigned port>`. Thử `http://<ip>:<cổng>/health` trước: trả `{"ok":true}` nghĩa là server đã chạy, chỉ còn vấn đề cổng/đường dẫn. File `botkeep.env` có sẵn danh sách biến. **Khuyên dùng:** trên panel chỉ khai các bí mật (token Telegram, Zoom, mật khẩu dashboard) cùng `MODE`, `INSTANCE_NAME`, `PUBLIC_URL`. Mọi thông số khác đã có mặc định tốt nhất trong code và tự cập nhật theo từng bản; nếu panel còn khai biến thông số thì giá trị cũ đó sẽ thắng, nên hãy xoá chúng. Trong khung `.env` của Botkeep, dòng `__BOTKEEP_KEEP_SECRET_…__` giữ nguyên để giữ giá trị; không dán dòng `<...>`. Lúc khởi động, log in dòng `Thông số đang dùng: …` để kiểm tra.
 
-**Chạy 9Router trên Botkeep**: 9Router là app Node.js, chạy thành **một server riêng** trên Botkeep (profile Node.js, start command `npx 9router` hoặc `9router`), rồi trong Secrets của bot đặt `NINEROUTER_BASE_URL=http://<địa-chỉ-server-9router>:20128/v1`. Nếu hai server trên Botkeep không gọi được nhau qua mạng nội bộ (tuỳ gói), anh có thể chạy 9Router trên máy tính cá nhân/VPS khác và trỏ URL public vào, hoặc đơn giản là chỉ dùng OpenRouter (`AI_PROVIDER_ORDER=openrouter`). Bot dùng ~200 MB RAM, 9Router thêm ~150–300 MB – vừa gói 2 GB.
+Bot dùng ~200 MB RAM; v4.0 không cần chạy thêm 9Router hay dịch vụ AI nào. Server cần ra được Internet tới OKX, các trang RSS, binance.com và api.alternative.me (tin tức).
 
 ## 3b. Chạy song song trên Render free + Botkeep (dự phòng lẫn nhau)
 
-Hai máy chạy cùng lúc nhưng **chỉ một máy giao dịch** (leader), máy kia đứng chờ (standby). Chúng dùng chung một cơ sở dữ liệu Postgres nên thấy cùng số dư, lệnh, lịch sử, bài học AI. Leader gia hạn "khoá" mỗi 20 giây; nếu leader chết/ngủ quá `LEADER_TTL` (90 giây) thì standby tự tiếp quản và báo Telegram. Hai máy ping `/health` của nhau mỗi 4 phút để Render free không bị ngủ (Render tắt web service free sau 15 phút không có request).
+Hai máy chạy cùng lúc nhưng **chỉ một máy giao dịch** (leader), máy kia đứng chờ (standby). Chúng dùng chung một cơ sở dữ liệu Postgres nên thấy cùng số dư, lệnh, lịch sử, tổng kết lệnh, tham số tự học, bộ nhớ đệm tin tức. Leader gia hạn "khoá" mỗi 20 giây; nếu leader chết/ngủ quá `LEADER_TTL` (90 giây) thì standby tự tiếp quản và báo Telegram. Hai máy ping `/health` của nhau mỗi 4 phút để Render free không bị ngủ (Render tắt web service free sau 15 phút không có request).
 
 **Bước 1 – Tạo Postgres dùng chung trên Supabase (free)**
 
@@ -80,9 +96,9 @@ Hai máy chạy cùng lúc nhưng **chỉ một máy giao dịch** (leader), má
 
 Lưu ý Supabase free: project bị **tạm dừng (pause) sau 7 ngày không có truy vấn** – bot chạy liên tục thì không bị; nếu anh tắt cả hai bot hơn 1 tuần thì vào dashboard Supabase bấm Restore rồi chạy lại. Giới hạn 500 MB dữ liệu là dư thừa (bot ghi vài MB/tháng). Nếu Render của anh ở region khác, chọn region Supabase tương ứng để giảm độ trễ (mỗi truy vấn vẫn chỉ vài chục ms, không ảnh hưởng giao dịch).
 
-**Bước 2 – Render**: New → Web Service → kết nối repo GitHub (hoặc dùng file `render.yaml` qua New → Blueprint). Runtime Python, Build command `pip install -r requirements.txt`, Start command `python run.py`, plan Free. Environment: `DATABASE_URL` (chuỗi Supabase ở trên), `INSTANCE_NAME=render`, `MODE=paper`, Telegram, OpenRouter key, `AI_PROVIDER_ORDER=openrouter` (Render không chạy được 9Router cùng service), `PEER_URL=<URL public của Botkeep>` nếu có. Render tự cấp `PORT` và `RENDER_EXTERNAL_URL`, bot tự dùng.
+**Bước 2 – Render**: New → Web Service → kết nối repo GitHub (hoặc dùng file `render.yaml` qua New → Blueprint). Runtime Python, Build command `pip install -r requirements.txt`, Start command `python run.py`, plan Free. Environment: `DATABASE_URL` (chuỗi Supabase ở trên), `INSTANCE_NAME=render`, `MODE=paper`, Telegram, `PEER_URL=<URL public của Botkeep>` nếu có. Render tự cấp `PORT` và `RENDER_EXTERNAL_URL`, bot tự dùng.
 
-**Bước 3 – Botkeep**: như mục 3, thêm Secrets `DATABASE_URL` (cùng chuỗi), `INSTANCE_NAME=botkeep`, `PEER_URL=https://<tên-service>.onrender.com`. Nếu có 9Router ở Botkeep thì để `AI_PROVIDER_ORDER=9router,openrouter` ở đây.
+**Bước 3 – Botkeep**: như mục 3, thêm Secrets `DATABASE_URL` (cùng chuỗi), `INSTANCE_NAME=botkeep`, `PEER_URL=https://<tên-service>.onrender.com`.
 
 **Bước 4 – Kiểm tra**: mở dashboard của cả hai, góc trên hiển thị `render · LEADER` / `botkeep · STANDBY` và danh sách instance. Hoặc gõ `/status` trên Telegram. Tắt thử máy leader, sau ~1.5 phút máy kia sẽ nhắn "👑 … tiếp quản".
 
@@ -99,7 +115,7 @@ python run.py
 
 ## 4. Lệnh Telegram
 
-`/status` vốn, PnL, lệnh mở, hạn mức AI · `/trades` 10 lệnh gần nhất · `/signals` tín hiệu & quyết định AI · `/ai` số lượt gọi từng model, quyết định gần nhất · `/lessons` tổng kết của AI · `/pause` `/resume` · `/close` đóng tất cả. Bot tự gửi báo cáo ngày lúc 0h theo `TIMEZONE` (mặc định giờ Việt Nam).
+`/status` vốn, PnL, lệnh mở, tâm lý tin tức · `/trades` 10 lệnh gần nhất · `/signals` tín hiệu & kết quả bóng · `/news` (`/tintuc`) Fear & Greed, tâm lý tin 12h, coin được nhắc nhiều, tin mới kèm điểm · `/tongket` tổng kết các lệnh gần nhất · `/learn` `/apply` tự học · `/btc` · `/pause` `/resume` · `/close` đóng tất cả. Bot tự gửi báo cáo ngày lúc 0h và báo cáo tự học lúc 7h theo `TIMEZONE` (mặc định giờ Việt Nam).
 
 ## 5. Quy trình 2 tuần ảo → thật
 
@@ -110,14 +126,14 @@ python run.py
 
 ## 6. Tinh chỉnh
 
-- Ít tín hiệu quá → hạ `MIN_SCORE` 5 → 4.5, `MIN_ADX` 22 → 20. Nhiều lệnh thua → tăng lên.
-- `OPENROUTER_MODELS=auto` (mặc định): bot tự đọc danh sách model `:free` hiện còn trên OpenRouter, làm mới mỗi 12h; model trả 404 (bị gỡ) tự loại và dò lại ngay. `openrouter/free` luôn đứng cuối làm lưới an toàn.
-- `AI_FAIL_POLICY`: khi mọi model lỗi – `score` vẫn vào nếu điểm KT ≥ `AI_FAIL_MIN_SCORE` (mặc định 7), `skip` bỏ qua. Để trống: chạy ảo = score, chạy thật = skip.
-- `AI_VETO_CONF` / `AI_OVERRIDE_MIN_SCORE`: AI phản đối với độ chắc < ngưỡng (mặc định chạy ảo 80%, chạy thật 0%) thì tín hiệu điểm ≥ 6.5 vẫn vào, ghi nguồn `ai_override`. Bộ tự học so kết quả các tín hiệu AI phản đối để nâng/hạ ngưỡng ±5%/ngày.
+- Ít tín hiệu quá → hạ `MIN_SCORE` 5 → 4.5, `MIN_ADX` 20 → 18. Nhiều lệnh thua → tăng lên.
+- `NEWS_SCORE_MAX` (1.5): điểm tin tối đa (× trọng số tin bộ tự học đo được). Muốn tin tức nặng/nhẹ hơn từ đầu: đổi `NEWS_WEIGHT` (0–2); `NEWS_ENABLED=false` để chạy thuần kỹ thuật so sánh.
+- `NEWS_EXIT_EVENTS` (`delist,hack,listing`): sự kiện mới khiến bot đóng lệnh đang mở; để trống để tắt.
+- `NEWS_FEEDS`: thêm/bớt RSS (`tên|url,tên|url`). `NEWS_REFRESH_MIN` (10), `NEWS_HALF_LIFE_H` (6), `NEWS_SHRINK` (1.0).
+- `DEFAULT_BLOCKS`: luật chặn sẵn. Nếu panel còn `DEFAULT_BLOCKS` của bản cũ, 3 luật tin tức chặn sẵn của v4.0 sẽ mất – hãy xoá biến đó trên panel.
+- `RISK_PER_TRADE`, `LEVERAGE`: hạ nếu thấy chuỗi thua dài. Bot đã tự co rủi ro sau chuỗi thua (`LOSS_STREAK_CUT`) và theo tin tức (`RISK_MIN_MULT`–`RISK_MAX_MULT`); `MAX_TOTAL_RISK` là trần cho mọi lệnh đang mở.
+- `CRYPTO_ONLY=false` chỉ khi muốn quét cả hợp đồng cổ phiếu/hàng hoá token hoá (không khuyên).
 - Phiên bản đang chạy hiện ở góc tiêu đề dashboard, `/health`, lệnh `status` và tin nhắn khởi động. Nếu Render và Botkeep chạy khác bản, nhãn phiên bản chuyển màu đỏ.
-- `AI_MAX_CALLS_PER_DAY`: hạn mức tổng (phân tích + tổng kết), chỉ tính lượt AI trả lời thành công. `AI_REVIEW_ENABLED=false` nếu muốn tiết kiệm chỉ gọi 1 lần/lệnh.
-- `AI_ENABLED=false`: chạy thuần kỹ thuật để so sánh.
-- `RISK_PER_TRADE`, `LEVERAGE`: hạ nếu thấy chuỗi thua dài. Bot đã tự co rủi ro sau chuỗi thua (`LOSS_STREAK_CUT`) và theo chất lượng tín hiệu (`RISK_MIN_MULT`–`RISK_MAX_MULT`); `MAX_TOTAL_RISK` là trần cho mọi lệnh đang mở.
 
 
 ## 8. Ghi nhận dữ liệu & tự học
@@ -125,17 +141,20 @@ python run.py
 **Trên web** (cuộn xuống dưới dashboard):
 - Tab **Hoạt động**: toàn bộ log của bot (giống console Botkeep), lọc theo mức INFO/WARNING/ERROR và tìm kiếm. Lưu 14 ngày.
 - Tab **Lịch sử quét**: mỗi lượt quét bao nhiêu coin đạt, loại vì lý do gì. Lưu 30 ngày.
-- Tab **Tín hiệu & AI**: mỗi tín hiệu kèm nguồn (đã vào lệnh / AI từ chối / không gửi AI / suýt đạt / bị luật chặn) và **kết quả thật** sau đó (TP / SL / hết giờ, tính bằng R).
+- Tab **Tín hiệu**: mỗi tín hiệu kèm nguồn (đã vào lệnh / xếp sau / sàn-ngân sách từ chối / suýt đạt / bị luật chặn), tin tức của coin lúc đó và **kết quả thật** sau đó (TP / SL / hết giờ, tính bằng R).
+- Tab **Tổng kết lệnh** và trang **Tin tức & Tự học** (tâm lý thị trường, coin được nhắc nhiều, tin mới kèm điểm và sự kiện, nguồn lỗi).
 - Thẻ **Tải dữ liệu**: tải CSV (mở được bằng Excel / Google Sheets, đúng tiếng Việt) hoặc sao lưu toàn bộ JSON.
 
 **Tự học hoạt động thế nào:**
 1. Mọi tín hiệu đã qua bộ lọc kỹ thuật, kể cả tín hiệu không vào lệnh, đều được theo dõi "bóng": bot xem nến 5 phút sau đó để biết nếu vào thì sẽ chạm TP hay SL trước. Kết quả tính bằng R (1R = khoảng cách tới SL), đã trừ phí.
-2. Mỗi giờ bot thống kê theo nhóm: nguồn tín hiệu, loại trigger, luật lọc, khung giờ, điểm số. Khi một nhóm có đủ mẫu (mặc định 30) **và** kết quả khác 0 có ý nghĩa thống kê (|kỳ vọng| / sai số chuẩn ≥ `LEARN_MIN_T` = 1.3; so sánh cách thoát / mức TP1 theo từng cặp trên cùng tín hiệu, TP1 cần ≥ 40 mẫu), bot điều chỉnh:
+2. Mỗi giờ bot thống kê theo nhóm: nguồn tín hiệu, loại trigger, luật lọc, khung giờ, điểm số, **tin tức (cùng/ngược chiều/không có tin), Fear & Greed**. Khi một nhóm có đủ mẫu (mặc định 30) **và** kết quả khác 0 có ý nghĩa thống kê (|kỳ vọng| / sai số chuẩn ≥ `LEARN_MIN_T` = 1.3; so sánh cách thoát / mức TP1 theo từng cặp trên cùng tín hiệu, TP1 cần ≥ 40 mẫu), bot điều chỉnh:
    - bật/tắt luật chặn trong danh mục cố định (vd. "short khi RSI 1h < 32") – chặn ở bộ lọc thì không tốn lượt AI;
    - trọng số từng trigger (0,6 – 1,4);
-   - ngưỡng điểm MIN_SCORE (4,0 – 7,0, mỗi lần ±0,5).
+   - ngưỡng điểm MIN_SCORE (4,0 – 7,0, mỗi lần ±0,5);
+   - **trọng số tin tức** (0 – 2, mỗi lần ±0,25) – v4.0, so tin cùng chiều vs ngược chiều bằng kiểm định Welch.
+   v4.0: mỗi giờ bot thử ~30 nhóm luật + trigger cùng lúc → thêm **kiểm soát tỉ lệ phát hiện sai Benjamini–Hochberg** (`LEARN_FDR_Q` = 0,10): một nhóm "đạt" t ≥ 2 do may rủi giữa nhiều nhóm sẽ không được đổi tham số.
    Mỗi tham số chỉ đổi tối đa 1 lần/48h (`LEARN_COOLDOWN_H`). v3.2: `LEARN_MIN_T` = 2,0; không bao giờ chặn cả một phía (long_side/short_side chỉ để thống kê); cách thoát lệnh cần ≥ `LEARN_EXIT_MIN_SAMPLES` = 60 cặp. Luật đã chặn vẫn được theo dõi bóng, nên nếu nhóm đó tốt lên bot sẽ tự bỏ chặn. (v3.1: trước đây 13–20 mẫu đã đổi, trọng số trigger nhảy qua lại trong 1 ngày – nay không còn.)
-3. Mỗi sáng (7h) AI đọc thống kê, viết nhận xét và gợi ý – **không tự áp dụng**, anh bấm "Áp dụng" nếu đồng ý. Tốn 1 lượt AI/ngày.
+3. Mỗi sáng (7h) bot gửi **báo cáo tự học** bằng số liệu (không AI): kết quả 24h, nhóm tốt/xấu nhất đủ mẫu, tác động tin tức, cách thoát tốt nhất, đề xuất chờ duyệt.
 4. Chạy ảo: tự áp dụng. Chạy thật: chỉ đề xuất, anh duyệt trên web hoặc gõ `/apply` trên Telegram. Nút "Khôi phục mặc định" đưa mọi thứ về ban đầu.
 
 Bot **không bao giờ tự sửa code** – chỉ chỉnh các tham số trong danh mục, có giới hạn và có lịch sử. Telegram: `/learn` xem trạng thái, `/apply` duyệt đề xuất.
@@ -187,12 +206,12 @@ Với Botkeep đã có HTTPS (vd `https://okx.bot-keep.xyz`), chatbot Zoom chạ
 
 **Chỉ chạy trên Botkeep (không có HTTPS):** dùng Incoming Webhook để nhận thông báo vào 1 kênh Zoom – cài app "Incoming Webhook", trong kênh gõ `/inc connect okxbot`, dán Endpoint + Token vào `ZOOM_WEBHOOK_URL`, `ZOOM_WEBHOOK_TOKEN`. Khi đó lệnh vẫn gõ qua Telegram hoặc dashboard.
 
-Lệnh dùng chung: `status, trades, signals, ai, learn, apply, lessons, btc, pause, resume, close` (Telegram thêm `/`, Zoom gõ trực tiếp hoặc `/okxbot <lệnh>`).
+Lệnh dùng chung: `status, trades, signals, news (tintuc), learn, apply, tongket, btc, pause, resume, close, phienban` (Telegram thêm `/`, Zoom gõ trực tiếp hoặc `/okxbot <lệnh>`).
 
 ## 11. Bối cảnh BTC, Open Interest, tỉ lệ long/short
 
 Mỗi lượt quét bot lấy BTC 15m/1h (xu hướng, % thay đổi 1h/4h). Với mỗi tín hiệu đã qua bộ lọc kỹ thuật, bot lấy thêm Open Interest thay đổi 1h, tỉ lệ tài khoản long/short và funding của coin đó. Các dữ liệu này:
-- được gửi cho AI khi phân tích;
+- cộng/trừ điểm (OI, funding) trước khi xét ngưỡng & xếp hạng;
 - được lưu cùng tín hiệu (tải được trong signals.csv);
 - tạo thành các **luật ứng viên** cho bộ tự học: long khi BTC 1h giảm, short khi BTC tăng, ngược xu hướng BTC, BTC biến động mạnh, giá tăng nhưng OI giảm, OI tăng đột biến, đám đông long/short quá đông, funding cực đoan.
 
@@ -206,22 +225,36 @@ render.yaml       – blueprint tạo Web Service free trên Render
 bot/config.py     – đọc biến môi trường / .env
 bot/exchange.py   – OKX qua ccxt
 bot/indicators.py – EMA/RSI/ATR/MACD/BB/ADX/VWAP
-bot/strategy.py   – cổng bắt buộc + trigger + chấm điểm hợp lưu
-bot/ai.py         – 9Router/OpenRouter, 2 lần gọi/lệnh, hạn mức ngày, bài học
+bot/strategy.py   – cổng bắt buộc + trigger + chấm điểm (kỹ thuật + dòng tiền + tin tức) + luật chặn + quyết định
+bot/news.py       – tin tức không AI: RSS, thông báo OKX/Binance, Fear & Greed, từ điển, sự kiện, điểm theo coin
+bot/review.py     – tổng kết lệnh theo số liệu (thay AI tổng kết)
 bot/risk.py       – khối lượng lệnh, cầu dao
 bot/engine.py     – PaperEngine & LiveEngine
 bot/storage.py    – SQLite (1 máy) hoặc Postgres dùng chung (nhiều máy) + khoá leader
 bot/exits.py      – logic thoát lệnh (fixed/hybrid/trail) dùng chung cho engine & mô phỏng
-bot/learner.py    – tự học: kết quả bóng, điều chỉnh tham số có giới hạn, AI tổng kết ngày
+bot/learner.py    – tự học: kết quả bóng, điều chỉnh tham số có kiểm định (t, Welch, Benjamini–Hochberg), báo cáo ngày
 bot/market.py     – bối cảnh BTC, Open Interest, long/short, funding
 bot/notify.py     – gửi thông báo đa kênh (Telegram, Zoom webhook/chatbot), nhận lệnh Zoom
 bot/eventlog.py   – ghi log hoạt động vào DB để xem trên web
 bot/telegram.py, bot/dashboard.py, bot/main.py
 test_smoke.py     – quét thật OKX, in tín hiệu (không cần key)
 test_engine.py    – kiểm tra toán PnL paper
+test_news.py      – tin tức (RSS/Atom, nhận diện coin, từ điển, sự kiện, tổng hợp, đóng lệnh theo tin), tổng kết lệnh
+test_flow.py      – luồng chính với sàn giả: quét → tin tức → luật chặn → vào lệnh → đóng vì tin xấu → tổng kết, web
+test_strategy.py, test_risk.py, test_learner.py, test_web.py – bộ lọc, rủi ro, tự học, giao diện
 botkeep.env       – các biến cần khai trên panel Botkeep (chỉ bí mật + thông tin riêng)
 check_db.py       – kiểm tra kết nối Supabase trước khi deploy
 ```
+
+## 12. Repo tham khảo trên GitHub
+
+Danh sách repo tương tự (bot TA, bot tin tức không dùng LLM, tự tối ưu tham số) đã kiểm chứng sao/ngày cập nhật/giấy phép, và những gì bot này đã/có thể học từ chúng: xem [THAM_KHAO.md](THAM_KHAO.md).
+
+---
+
+# Lịch sử các bản trước
+
+Các mục dưới đây mô tả các bản v2.9–v3.2 (còn dùng AI) – giữ lại để biết lý do của từng thông số.
 
 ## Tối ưu lợi nhuận kỳ vọng (v2.9)
 Mục tiêu là **lợi nhuận kỳ vọng** = tỉ lệ thắng × lãi trung bình − tỉ lệ thua × lỗ trung bình, không chỉ tỉ lệ thắng.

@@ -35,8 +35,29 @@ class OKX:
     def market(self, symbol):
         return self.markets()[symbol]
 
+    @staticmethod
+    def is_crypto(m):
+        """Hợp đồng crypto thường. OKX còn niêm yết cổ phiếu / hàng hoá token hoá dạng USDT-SWAP (instCategory 3 = cổ phiếu,
+        4 = hàng hoá) và hợp đồng tiền niêm yết (ruleType pre_market) – không phải altcoin: giờ giao dịch, khoảng trống giá,
+        tách cổ phiếu làm chỉ báo sai. 05/11/2026: 236/525 hợp đồng USDT-SWAP là loại này, 15/50 cặp volume lớn nhất.
+        Hợp đồng đã có lịch gỡ (expTime) cũng loại – sắp bị huỷ niêm yết."""
+        info = m.get("info") or {}
+        if str(info.get("instCategory") or "1") != "1":
+            return False
+        if str(info.get("ruleType") or "normal") != "normal":
+            return False
+        if m.get("swap") and str(info.get("expTime") or "").strip():
+            return False
+        return True
+
+    def crypto_bases(self):
+        """Mã gốc của mọi hợp đồng USDT-SWAP crypto đang giao dịch (để module tin tức nhận diện coin)."""
+        return {m["base"] for m in self.markets().values()
+                if m.get("swap") and m.get("quote") == "USDT" and m.get("active", True)
+                and (not cfg.CRYPTO_ONLY or self.is_crypto(m))}
+
     def top_altcoins(self, n=25):
-        """Lấy n cặp USDT-SWAP có volume 24h (USD) cao nhất, loại BTC/ETH/stable."""
+        """Lấy n cặp USDT-SWAP crypto có volume 24h (USD) cao nhất, loại BTC/ETH/stable và cổ phiếu/hàng hoá token hoá."""
         mk = self.markets()
         tickers = None
         for attempt in range(3):
@@ -56,7 +77,7 @@ class OKX:
             m = mk.get(sym)
             if not m or not m.get("swap") or m.get("quote") != "USDT" or not m.get("active", True):
                 continue
-            if m["base"].upper() in cfg.EXCLUDE:
+            if m["base"].upper() in cfg.EXCLUDE or (cfg.CRYPTO_ONLY and not self.is_crypto(m)):
                 continue
             info = t.get("info", {})
             try:

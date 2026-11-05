@@ -1,33 +1,25 @@
 """Quản lý rủi ro & tính khối lượng lệnh.
 
-v3.1 – rủi ro theo chất lượng: thay vì chặn cứng tín hiệu "vừa đủ" và vào hết cỡ với tín hiệu "đẹp",
-mỗi lệnh có hệ số rủi ro = chất lượng (điểm KT + AI) × chuỗi thua gần đây, kẹp trong [RISK_MIN_MULT, RISK_MAX_MULT].
+Mỗi lệnh có hệ số rủi ro = hệ số tin tức × chuỗi thua gần đây, kẹp trong [RISK_MIN_MULT, RISK_MAX_MULT].
 Tổng rủi ro mọi lệnh đang mở không vượt MAX_TOTAL_RISK vốn.
+v4.0: bỏ hệ số theo AI. Điểm kỹ thuật vẫn KHÔNG làm tăng rủi ro (v3.2: điểm ≥ 7 thua nặng nhất – điểm cao = xu hướng
+đã rõ với mọi người = vào muộn); chỉ tin tức (đã nhân trọng số tin bộ tự học đo được) và chuỗi thua điều tiết.
 """
 from .config import cfg
+from . import strategy
 
 
-def quality_mult(sig, ai):
-    """Hệ số rủi ro theo chất lượng tín hiệu (1.0 = lệnh chuẩn: AI đồng ý ≥ AI_MIN_CONFIDENCE).
-    v3.2: KHÔNG tăng rủi ro theo điểm hợp lưu nữa – 211 tín hiệu bóng: điểm ≥ 7 thua nặng nhất (-0.33R, thắng 25%),
-    điểm < 5 gần hoà (-0.05R). Điểm cao = xu hướng đã rõ với mọi người = vào muộn. Chỉ còn AI và chuỗi thua điều tiết."""
-    ai = ai or {}
-    m = 1.0
-    conf = ai.get("confidence")
-    if ai.get("fallback"):                       # AI lỗi – vào theo điểm KT
-        m *= 0.6
-    elif ai.get("override") or ai.get("weak"):   # AI phản đối yếu / đồng ý nhưng chưa chắc
-        m *= 0.5
-    elif conf is not None:
-        try:
-            conf = float(conf)
-            if conf >= 80:
-                m *= 1.2
-            elif conf < 65:
-                m *= 0.85
-        except (TypeError, ValueError):
-            pass
-    return m
+def quality_mult(sig, dec=None):
+    """Hệ số rủi ro theo tin tức (1.0 = không có tin riêng / tin trung tính).
+    Tin cùng chiều lệnh → tăng tối đa +25% × trọng số tin; ngược chiều → giảm tương ứng. Trọng số tin (news_w, 0–2) do
+    bộ tự học chỉnh theo kết quả thật: tin không giúp ích → trọng số về 0 → hệ số luôn 1.0."""
+    c = getattr(sig, "context", None) or {}
+    if not (c.get("news_n") or 0):
+        return 1.0
+    al = strategy.news_align(sig.side, c)
+    if abs(al) < cfg.NEWS_MIN_BIAS:
+        return 1.0
+    return max(0.5, min(1.5, 1.0 + 0.25 * strategy.news_weight() * al))
 
 
 def streak_mult(closed_recent):
@@ -42,8 +34,8 @@ def streak_mult(closed_recent):
     return cfg.LOSS_STREAK_CUT ** max(0, streak - (cfg.LOSS_STREAK_FROM - 1))
 
 
-def risk_mult(sig, ai, closed_recent=None):
-    m = quality_mult(sig, ai) * streak_mult(closed_recent)
+def risk_mult(sig, dec=None, closed_recent=None):
+    m = quality_mult(sig, dec) * streak_mult(closed_recent)
     return max(cfg.RISK_MIN_MULT, min(cfg.RISK_MAX_MULT, m))
 
 

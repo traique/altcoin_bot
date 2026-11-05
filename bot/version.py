@@ -16,13 +16,23 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "3.2.0"
-RELEASED = "2026-10-28"
-RELEASE_BUILD = "380dfca"          # ghi bởi `python -m bot.version --stamp`
+VERSION = "4.0.0"
+RELEASED = "2026-11-05"
+RELEASE_BUILD = "2704525"          # ghi bởi `python -m bot.version --stamp`
 BUILD = RELEASED                   # tương thích các chỗ cũ dùng BUILD
 
 # Mới nhất ở trên: (phiên bản, ngày, các thay đổi – câu ngắn, đọc tốt trên điện thoại)
 NOTES = (
+    ("4.0.0", "2026-11-05", (
+        "Bỏ hoàn toàn AI khỏi quyết định mua bán: vào lệnh thuần kỹ thuật + dòng tiền + tin tức, không cần key 9Router/OpenRouter",
+        "Tin tức miễn phí, không cần key: 10 trang RSS crypto, thông báo niêm yết/huỷ niêm yết OKX & Binance, Fear & Greed – chấm bằng từ điển + luật sự kiện",
+        "Tin của coin cộng/trừ tối đa ±1,5 điểm × trọng số tin; chặn sẵn: coin bị huỷ niêm yết, long khi có tin hack, short khi vừa niêm yết sàn lớn",
+        "Lệnh đang mở gặp tin hack / huỷ niêm yết MỚI (short: tin niêm yết) → tự đóng và báo",
+        "Rủi ro co giãn theo tin tức (0,5–1,5× tuỳ trọng số tin) thay cho hệ số AI",
+        "Bộ tự học tự nâng cấp: đo tin cùng/ngược chiều (kiểm định Welch) để chỉnh trọng số tin 0–2, thống kê theo tin & Fear/Greed, chống học nhiễu khi thử ~30 nhóm (Benjamini–Hochberg)",
+        "Chỉ quét crypto thật: loại cổ phiếu/hàng hoá token hoá theo phân loại OKX (trước đây 15/50 cặp được quét là cổ phiếu, dầu)",
+        "Tổng kết lệnh & báo cáo ngày theo số liệu (không AI); web có trang Tin tức & Tự học; lệnh news/tintuc, tongket",
+    )),
     ("3.2.0", "2026-10-28", (
         "Rút từ 211 tín hiệu bóng 23–27/10: cổng mới không đánh ngược nhịp 1h của coin (short khi vừa tăng ≥0.5%/1h: -0.72R, thắng 18%)",
         "Volume cao trào ≥1.5× và ADX 1h ≥35 bị TRỪ điểm thay vì cộng; chặn sẵn phiên 13h–19h VN và nến cao trào; cổng BTC 0.3%",

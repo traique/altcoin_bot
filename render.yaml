@@ -1,4 +1,5 @@
 # Render Blueprint – tạo Web Service free tier cho bot (Dashboard > New > Blueprint, hoặc tạo tay theo README)
+# v4.0: không còn AI – không cần OPENROUTER_API_KEY / AI_PROVIDER_ORDER. Giữ nguyên tên service để Render không tạo service mới.
 services:
   - type: web
     name: okx-ai-bot
@@ -23,10 +24,6 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-      - key: OPENROUTER_API_KEY
-        sync: false
-      - key: AI_PROVIDER_ORDER
-        value: openrouter
       - key: DASHBOARD_USER
         value: admin
       - key: DASHBOARD_PASS

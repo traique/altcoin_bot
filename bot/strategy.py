@@ -1,10 +1,12 @@
-"""Sinh tín hiệu kỹ thuật – phiên bản "khắt khe" để giảm tối đa số lần hỏi AI.
+"""Sinh tín hiệu & quyết định vào lệnh – thuần quy tắc (kỹ thuật + dòng tiền + tin tức), KHÔNG dùng AI.
 
 Nguyên tắc:
   * Chỉ dùng NẾN ĐÃ ĐÓNG (bỏ nến đang hình thành) → tín hiệu không đổi ý giữa chừng.
   * Có các CỔNG BẮT BUỘC (gate) – thiếu 1 cổng là loại ngay, không chấm điểm.
   * Phải có ít nhất 1 TRIGGER rõ ràng (sự kiện vừa xảy ra trong 1–3 nến gần nhất).
-  * Sau đó mới chấm điểm hợp lưu (confluence); chỉ ứng viên tốt nhất mới được hỏi AI.
+  * Chấm điểm hợp lưu kỹ thuật, cộng/trừ điểm dòng tiền (OI, funding) và tin tức (độ lệch tin của coin × trọng số
+    tin tức mà bộ tự học đo được), rồi áp các LUẬT CHẶN (bộ tự học bật/tắt theo kết quả bóng).
+  * Ứng viên đạt ngưỡng điểm, không bị chặn, RR đủ → vào lệnh (decide()). Không có bước hỏi AI.
 """
 import logging
 import time
@@ -15,8 +17,8 @@ from .config import cfg
 log = logging.getLogger("strategy")
 
 # Tham số do bộ tự học (learner.py) cập nhật. Mặc định = không can thiệp.
-LEARNED = {"min_score": None, "trigger_w": {}, "blocks": [], "unblocked": [], "exit_mode": None, "ai_veto_conf": None,
-           "tp1_r": None}
+LEARNED = {"min_score": None, "trigger_w": {}, "blocks": [], "unblocked": [], "exit_mode": None, "tp1_r": None,
+           "news_w": None}
 
 TRIGGER_KEYS = {"MACD": "macd_cross", "EMA9": "ema_cross", "Breakout": "breakout", "Breakdown": "breakout",
                 "Pullback": "pullback", "Nến nhấn chìm": "engulf", "Đảo chiều tại biên": "range_revert",
@@ -75,6 +77,23 @@ RULES = {
                       lambda side, c: side == "short" and _v(c, "ls_ratio", 1) < 0.7),
     "funding_hot": ("Funding cực đoan cùng chiều lệnh (>0.05%)",
                     lambda side, c: (side == "long" and _v(c, "funding", 0) > 0.0005) or (side == "short" and _v(c, "funding", 0) < -0.0005)),
+    # ---- v4.0: tin tức (news.py). 3 luật đầu chặn sẵn (DEFAULT_BLOCKS), còn lại để bộ tự học thống kê
+    "news_delist": ("Coin có tin huỷ niêm yết (7 ngày) – mọi hướng", lambda side, c: "delist" in (c.get("news_events") or ())),
+    "news_hack_long": ("Long khi coin vừa có tin hack/exploit (48h)",
+                       lambda side, c: side == "long" and "hack" in (c.get("news_events") or ())),
+    "news_listing_short": ("Short khi coin vừa có tin niêm yết sàn lớn (48h)",
+                           lambda side, c: side == "short" and "listing" in (c.get("news_events") or ())),
+    "news_unlock_long": ("Long khi coin có tin mở khoá token (72h)",
+                         lambda side, c: side == "long" and "unlock" in (c.get("news_events") or ())),
+    "news_against": ("Ngược chiều tin tức của coin (lệch ≥ 0.3)",
+                     lambda side, c: _v(c, "news_n", 0) > 0 and news_align(side, c) <= -0.3),
+    "news_hype": ("Coin đang nóng trên báo (≥ 5 bài/24h)", lambda side, c: _v(c, "news_n", 0) >= 5),
+    "mkt_news_against": ("Ngược tâm lý tin tức toàn thị trường (lệch ≥ 0.25)",
+                         lambda side, c: _v(c, "mkt_news", 0) * (1 if side == "long" else -1) <= -0.25),
+    "fng_greed_long": ("Long khi thị trường tham lam cực độ (Fear & Greed ≥ 75)",
+                       lambda side, c: side == "long" and _v(c, "fng", 50) >= 75),
+    "fng_fear_short": ("Short khi thị trường sợ hãi cực độ (Fear & Greed ≤ 25)",
+                       lambda side, c: side == "short" and _v(c, "fng", 50) <= 25),
 }
 
 
@@ -101,6 +120,18 @@ def blocked_by(sig):
 def _v(c, k, default):
     v = c.get(k)
     return default if v is None else v
+
+
+def news_align(side, ctx):
+    """Độ lệch tin tức của coin theo hướng lệnh: dương = tin ủng hộ lệnh, âm = ngược chiều (−1..+1)."""
+    b = _v(ctx or {}, "news_bias", 0.0)
+    return b if side == "long" else -b
+
+
+def news_weight():
+    """Trọng số tin tức đang dùng: bộ tự học chỉnh trong 0–2 (0 = bỏ qua tin), mặc định NEWS_WEIGHT."""
+    v = LEARNED.get("news_w")
+    return float(v) if v is not None else cfg.NEWS_WEIGHT
 
 
 def matching_rules(side, ctx):
@@ -341,12 +372,32 @@ def flow_adjust(sig):
     return round(d, 2), why
 
 
-def apply_flow(sig):
-    """Cộng điểm dòng tiền vào tín hiệu và xét lại ngưỡng. Trả về lý do loại ('' nếu đạt)."""
-    d, why = flow_adjust(sig)
-    if d:
-        sig.score = round(sig.score + d, 2)
-        sig.reasons = list(sig.reasons) + why
+def news_adjust(sig):
+    """Điểm tin tức – gọi SAU khi đã gắn news.coin() vào context, TRƯỚC khi xét ngưỡng & xếp hạng.
+    Điểm = trọng số tin (bộ tự học đo) × NEWS_SCORE_MAX × độ lệch tin theo hướng lệnh. Trả về (điểm, lý do)."""
+    c = sig.context or {}
+    n = c.get("news_n") or 0
+    al = news_align(sig.side, c)
+    if not n or abs(al) < cfg.NEWS_MIN_BIAS:
+        return 0.0, []
+    cap = 2 * cfg.NEWS_SCORE_MAX
+    d = round(max(-cap, min(cap, news_weight() * cfg.NEWS_SCORE_MAX * al)), 2)
+    if not d:
+        return 0.0, []
+    head = c.get("news_head") or ""
+    why = (f"Tin tức {'ủng hộ' if d > 0 else 'ngược chiều'} {al:+.2f} ({n} bài, {d:+.2f} điểm)"
+           + (f": {head[:90]}" if head else ""))
+    return d, [why]
+
+
+def apply_context(sig):
+    """Cộng điểm dòng tiền (OI/funding) + tin tức vào tín hiệu rồi xét lại ngưỡng. Trả về lý do loại ('' nếu đạt).
+    Gọi đúng 1 lần cho mỗi tín hiệu (điểm cộng dồn vào sig.score)."""
+    for fn in (flow_adjust, news_adjust):
+        d, why = fn(sig)
+        if d:
+            sig.score = round(sig.score + d, 2)
+            sig.reasons = list(sig.reasons) + why
     min_score = min_score_for(sig)
     if sig.score < min_score:
         sig.rejected = f"điểm thấp ({sig.score} < {min_score})"
@@ -355,23 +406,26 @@ def apply_flow(sig):
     return ""
 
 
-def describe_candles(df, a, n=6):
-    """Mô tả n nến đã đóng gần nhất bằng chữ, chuẩn hoá theo ATR (LLM đọc số lẻ thô rất kém)."""
-    out = []
-    rows = df.rows(-n)
-    for k, x in enumerate(rows):
-        rng = (x.high - x.low) or 1e-12
-        body = x.close - x.open
-        up_w = (x.high - max(x.open, x.close)) / rng
-        dn_w = (min(x.open, x.close) - x.low) / rng
-        tag = f"nến -{n - k}" + (" (tín hiệu)" if k == n - 1 else "")
-        out.append(f"{tag}: {'tăng' if body >= 0 else 'giảm'} {body / a:+.1f} ATR, biên độ {rng / a:.1f} ATR, "
-                   f"thân {abs(body) / rng * 100:.0f}%, râu trên {up_w * 100:.0f}%, râu dưới {dn_w * 100:.0f}%, "
-                   f"close_pos {x.close_pos:.2f}, vol x{x.vol_ratio:.1f}")
-    r = df.row(-1)
-    out.append(f"khoảng cách: tới đỉnh 20 nến {(r.hh20 - r.close) / a:+.1f} ATR, tới đáy 20 nến {(r.close - r.ll20) / a:+.1f} ATR, "
-               f"tới EMA21 {(r.close - r.ema21) / a:+.1f} ATR")
-    return out
+apply_flow = apply_context        # tên cũ (v2.8–v3.2)
+
+
+def decide(sig):
+    """Quyết định vào lệnh (thay cho AI từ v4.0): ứng viên đến đây đã qua cổng, trigger, ngưỡng điểm, luật chặn.
+    Trả về dict mô tả quyết định – 'confidence' chỉ để hiển thị (50 = vừa đủ ngưỡng), KHÔNG dùng để tăng rủi ro
+    (211 tín hiệu bóng v3.2: điểm cao không thắng nhiều hơn). Rủi ro chỉ co giãn theo tin tức – xem risk.quality_mult."""
+    c = sig.context or {}
+    ms = min_score_for(sig)
+    ok = sig.score >= ms and sig.rr >= min_rr_for(sig) and not blocked_by(sig)
+    n = c.get("news_n") or 0
+    al = round(news_align(sig.side, c), 2) if n else 0.0
+    parts = [f"điểm {sig.score:g} (ngưỡng {ms:g})", f"RR {sig.rr:.2f}",
+             f"tin coin {al:+.2f} ({n} bài)" if n else "không có tin riêng"]
+    if c.get("fng") is not None:
+        parts.append(f"F&G {c['fng']}")
+    if c.get("news_events"):
+        parts.append("sự kiện: " + ",".join(c["news_events"]))
+    return {"decision": sig.side.upper() if ok else "SKIP", "confidence": int(max(1, min(99, round(50 + 10 * (sig.score - ms))))),
+            "reason": "; ".join(parts), "model": "kỹ thuật+tin tức", "news": al}
 
 
 def _context(df, htf, trend, funding, change24h, market, a, setup):
@@ -386,7 +440,6 @@ def _context(df, htf, trend, funding, change24h, market, a, setup):
         "htf_trend": trend, "htf_rsi": round(float(h.rsi), 1), "htf_adx": round(float(h.adx), 1),
         "funding": funding, "change24h": round(change24h, 2), "hour": time.localtime().tm_hour,
         "bb_pos": round(float((r.close - r.bb_lo) / (r.bb_up - r.bb_lo)), 2) if r.bb_up != r.bb_lo else 0.5,
-        "last_candles": describe_candles(df, a),
     }
     if market:
         ctx.update(market)
@@ -488,7 +541,7 @@ def min_score_for(sig):
 
 def diagnose(symbol, ohlcv_ltf, ohlcv_htf, funding=0.0, change24h=0.0, market=None):
     """Trả về (signal, lý do loại, số liệu tóm tắt).
-    - lý do == ""          → tín hiệu đạt, gửi AI
+    - lý do == ""          → tín hiệu đạt phần kỹ thuật (main còn cộng dòng tiền + tin tức, xét luật chặn)
     - signal != None + lý do → tín hiệu "suýt đạt" (điểm thấp / RR thấp / bị luật tự học chặn) – vẫn được
       ghi lại để theo dõi kết quả bóng, giúp bộ tự học biết ngưỡng có quá chặt không.
     - signal == None       → bị loại ở cổng bắt buộc."""

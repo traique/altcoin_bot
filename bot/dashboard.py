@@ -26,6 +26,7 @@ const f=(n,d=2)=>n==null||isNaN(n)?'—':Number(n).toLocaleString('vi-VN',{minim
 const px=(n)=>n==null?'—':Number(n).toPrecision(5).replace(/\.?0+$/,'');
 const t=s=>s?new Date(s*1000).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
 const ago=s=>{const m=Math.round((Date.now()/1000-s)/60);return m<1?'vừa xong':m<60?m+' phút':Math.round(m/60)+' giờ'};
+const agoT=s=>{const a=ago(s);return a==='vừa xong'?a:a+' trước'};
 const sideTag=s=>`<span class="side ${s}">${s==='long'?'LONG ▲':'SHORT ▼'}</span>`;
 const sgn=n=>n>=0?'+':'−';
 let D=null,tab='trades';
@@ -65,7 +66,7 @@ function render(d){
   const run=d.halted?'Đã dừng (cầu dao)':d.paused?'Tạm dừng':'Đang chạy';
   const b=d.btc||{};
   const btc=b.btc_price?` · BTC ${Number(b.btc_price).toLocaleString('vi-VN')} <span class="${b.btc_chg_1h>=0?'up':'dn'}">${b.btc_chg_1h>=0?'▲ +':'▼ '}${f(b.btc_chg_1h,2)}%/1h</span> (${({1:'xu hướng tăng',[-1]:'xu hướng giảm',0:'đi ngang'})[b.btc_trend_1h]||'—'})`:'';
-  put('sub',`<span class="dot ${d.halted?'warn':d.paused?'off':''}" aria-hidden="true"></span>${run} · <span class="pill gold">${d.mode==='paper'?'Chạy ảo':'Tiền thật'}</span> <span class="pill">${esc(d.instance)} · ${d.is_leader?'leader':'dự phòng'}</span>${btc} · cập nhật ${ago(d.ts)} trước`);
+  put('sub',`<span class="dot ${d.halted?'warn':d.paused?'off':''}" aria-hidden="true"></span>${run} · <span class="pill gold">${d.mode==='paper'?'Chạy ảo':'Tiền thật'}</span> <span class="pill">${esc(d.instance)} · ${d.is_leader?'leader':'dự phòng'}</span>${btc} · cập nhật ${agoT(d.ts)}`);
   const upnl=(d.open||[]).reduce((a,x)=>a+(x.upnl||0),0);
   put('strip',[
     ['Vốn hiện tại',`${f(d.equity,2)}<small>USDT</small>`,`<span class="${cls}">${pnl>=0?'▲':'▼'} ${f(Math.abs(pnl),2)} (${sgn(pnl)}${f(Math.abs(pct),1)}%)</span> so với ${f(d.start,2)}`],
@@ -73,45 +74,48 @@ function render(d){
     ['Tỉ lệ thắng',`${s.trades?s.winrate+'%':'—'}`,`${s.wins||0} thắng · ${s.losses||0} thua${s.trades&&s.trades<30?' · cần ≥30 lệnh để tin cậy':''}`],
     ['Lệnh đang mở',`${(d.open||[]).length}`,(d.open||[]).length?`<span class="${upnl>=0?'up':'dn'}">${sgn(upnl)}${f(Math.abs(upnl),3)} USDT chưa chốt</span>`:'đang chờ tín hiệu'],
   ].map(([l,v,x])=>`<div class="stat"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${x}</div></div>`).join(''));
-  const aiPct=Math.min(100,100*d.ai_calls_today/(d.ai_budget||1));
+  const nw=d.news||{},mk=nw.market||{},fng=mk.fng;
+  const fngPct=fng==null?0:Math.max(0,Math.min(100,fng));
+  const nOk=Object.values(nw.status||{}).filter(x=>x.ok).length,nAll=Object.keys(nw.status||{}).length;
   put('tiles',[
     ['Profit factor',s.profit_factor??'—',s.profit_factor>=1.3?'tốt (≥ 1,3)':'mục tiêu ≥ 1,3'],
     ['Thắng / thua TB',`<span class="up">+${f(s.avg_win,3)}</span> / <span class="dn">${f(s.avg_loss,3)}</span>`,'USDT mỗi lệnh'],
-    ['AI hôm nay',`${d.ai_calls_today}<span class="muted" style="font-size:13px"> / ${d.ai_budget}</span>`,`<div class="meter" role="img" aria-label="${d.ai_calls_today} trên ${d.ai_budget} lượt"><span style="width:${aiPct}%"></span></div>`],
-    ['Model AI gần nhất',`<span style="font-size:14px;word-break:break-all">${esc((d.ai_model||'—').split('/').slice(-1)[0])}</span>`,esc((d.ai_model||'').split('/')[0]||'chưa gọi')],
+    ['Fear & Greed',fng==null?'—':`${fng}<span class="muted" style="font-size:13px"> ${esc(mk.fng_cls||'')}</span>`,`<div class="meter" role="img" aria-label="Fear and Greed ${fng??'chưa có'} trên 100"><span style="width:${fngPct}%"></span></div>`],
+    ['Tin thị trường (12h)',nw.enabled?`<span class="${(mk.mkt_news||0)>=0?'up':'dn'}">${(mk.mkt_news||0)>=0?'+':''}${f(mk.mkt_news||0,2)}</span>`:'tắt',nw.enabled?`${mk.mkt_news_n||0} bài · ${nOk}/${nAll} nguồn OK · ${nw.ts?agoT(nw.ts):'chưa tải'}`:'NEWS_ENABLED=false'],
   ].map(([k,v,x])=>`<div class="kpi"><div class="l">${k}</div><div class="v">${v}</div><div class="s">${x}</div></div>`).join(''));
   put('meta',`${d.shared_db?'DB dùng chung (Supabase)':'DB cục bộ (SQLite)'} · leader: <b>${esc(d.leader||'—')}</b> · ${(d.instances||[]).map(i=>esc(i.instance)+' '+(((i.info||'').match(/v[\d.]+/)||[''])[0])+' '+(Date.now()/1000-i.ts>120?'(mất liên lạc)':'●')).join(' · ')}`);
-  renderAI(d.ai||{});
+  renderNews(d.news||{});
   renderLearn(d.learn);
   if($('svg')){drawChart(d.curve);put('crange',d.curve&&d.curve.length?`${d.curve.length} điểm · ghi mỗi 5 phút`:'');}
   if($('open')){
     put('openN',(d.open||[]).length?`${d.open.length} lệnh`:'');
     put('open',(d.open||[]).length?d.open.map(x=>`<div class="row"><div class="t">${sideTag(x.side)} ${x.symbol.split('/')[0]}</div>
       <div class="r ${x.upnl>=0?'up':'dn'}">${x.upnl==null?'—':sgn(x.upnl)+f(Math.abs(x.upnl),4)}<small>USDT${x.price&&x.margin?' · '+f(100*x.upnl/x.margin,1)+'% ký quỹ':''}</small></div>
-      <div class="m">Vào ${px(x.entry)} · Giá ${px(x.price)} · SL ${px(x.sl)} · ${x.exit_mode==='hybrid'?(x.tp1_done?`đã chốt ${f(100*(1-x.notional/x.notional0),0)}% (${sgn(x.realized)}${f(Math.abs(x.realized),3)}), phần còn lại bám sóng`:`TP1 ${px(x.tp1)} rồi bám sóng`):x.exit_mode==='trail'?'bám sóng (trailing ATR)':`TP ${px(x.tp)}`} · ${f(x.notional,1)} USDT · mở ${ago(x.opened_at)} trước</div></div>`).join('')
+      <div class="m">Vào ${px(x.entry)} · Giá ${px(x.price)} · SL ${px(x.sl)} · ${x.exit_mode==='hybrid'?(x.tp1_done?`đã chốt ${f(100*(1-x.notional/x.notional0),0)}% (${sgn(x.realized)}${f(Math.abs(x.realized),3)}), phần còn lại bám sóng`:`TP1 ${px(x.tp1)} rồi bám sóng`):x.exit_mode==='trail'?'bám sóng (trailing ATR)':`TP ${px(x.tp)}`} · ${f(x.notional,1)} USDT · mở ${agoT(x.opened_at)}</div></div>`).join('')
       :'<div class="empty">Không có lệnh nào đang mở – bot đang chờ tín hiệu đủ điều kiện.</div>');
-    const ls=d.last_scan;put('scan',ls?`<b>Lần quét cuối</b> ${ago(ls.ts)} trước · ${ls.scanned} coin · <b class="${ls.passed?'up':''}">${ls.passed} đạt</b>${ls.top&&ls.top.length?' ('+ls.top.map(esc).join(', ')+')':''}<br>Loại vì: ${Object.entries(ls.reasons||{}).map(([k,v])=>`${esc(k)} <b>${v}</b>`).join(' · ')||'—'}${ls.near&&ls.near.length?`<br>Suýt đạt: ${ls.near.map(esc).join(', ')}`:''}`:'Chưa quét lần nào.');
+    const ls=d.last_scan;put('scan',ls?`<b>Lần quét cuối</b> ${agoT(ls.ts)} · ${ls.scanned} coin · <b class="${ls.passed?'up':''}">${ls.passed} đạt</b>${ls.top&&ls.top.length?' ('+ls.top.map(esc).join(', ')+')':''}<br>Loại vì: ${Object.entries(ls.reasons||{}).map(([k,v])=>`${esc(k)} <b>${v}</b>`).join(' · ')||'—'}${ls.near&&ls.near.length?`<br>Suýt đạt: ${ls.near.map(esc).join(', ')}`:''}`:'Chưa quét lần nào.');
   }
   renderLog();
 }
-function renderAI(a){
-  const sub=$('aiSub'),last=$('aiLast'),el=$('aiModels');if(!el)return;
-  if(!a.enabled){sub.textContent='tắt';last.textContent='AI đang tắt (AI_ENABLED=false hoặc chưa cấu hình provider) – bot vào lệnh thuần kỹ thuật.';el.innerHTML='';return}
-  sub.innerHTML=`${a.calls_today}/${a.budget} hôm nay · ngưỡng ${a.min_confidence}% · thứ tự: ${(a.order||[]).join(' → ')} · khi AI lỗi: ${a.fail_policy==='skip'?'bỏ qua':a.fail_policy==='score'?'vào theo điểm KT':'tự động'}`;
-  if(a.last_result){const r=a.last_result,ok=r.decision===r.side.toUpperCase()&&r.confidence>=a.min_confidence;
-    last.innerHTML=`<b>Quyết định gần nhất</b> · ${t(r.ts)} — ${sideTag(r.side)} ${r.symbol.split('/')[0]} (điểm ${r.score}) → <b class="${ok?'up':'dn'}">${r.decision} ${r.confidence}%</b> <span style="color:var(--mut)">${(r.model||'').split('/').slice(-1)[0]}</span><br>${r.reason||''}`}
-  else last.innerHTML='Chưa có tín hiệu nào được gửi cho AI – bộ lọc kỹ thuật chưa tìm thấy ứng viên đủ điều kiện.';
-  if(a.last_error)last.innerHTML+=`<br><span class="dn">⚠ Lần hỏi gần nhất không model nào trả lời: ${esc(a.last_error)}</span>`;
-  const provs=(a.providers||[]).map(p=>`<span class="pill">${p.name}: ${p.models.length} model</span>`).join(' ');
-  const rows=(a.models||[]);
-  el.innerHTML=`<div class="row"><div class="t" style="gap:6px">${provs||'<span class="muted">Chưa cấu hình nhà cung cấp AI</span>'}</div></div>`+
-   (rows.length?rows.map(m=>{const rate=m.calls?Math.round(100*m.ok/m.calls):0;
-    return `<div class="row"><div class="t">${m.model.split('/').slice(-1)[0]} <span class="pill" style="font-size:10px">${m.model.split('/')[0]}</span>${m.cooldown?'<span class="pill" style="color:var(--dn)">nghỉ</span>':''}</div>
-    <div class="r">${m.calls} lượt<small>${m.ok} ok · ${m.fail} lỗi · ${rate}%</small></div>
-    <div class="m">${m.analyze} phân tích · ${m.review} tổng kết${m.avg_ms?` · ~${(m.avg_ms/1000).toFixed(1)}s/lượt`:''} · dùng lần cuối ${ago(m.last_ts)} trước${m.last_error?`<br><span class="dn">Lỗi cuối: ${m.last_error}</span>`:''}</div></div>`}).join('')
-   :'<div class="empty">Chưa gọi model nào.</div>');
+function renderNews(n){
+  const sub=$('nwSub'),mk_=$('nwMarket'),el=$('nwList');if(!el)return;
+  if(!n.enabled){sub.textContent='tắt';mk_.textContent='Tin tức đang tắt (NEWS_ENABLED=false) – bot quyết định thuần kỹ thuật.';el.innerHTML='';return}
+  const m=n.market||{},EV=n.event_names||{};
+  sub.innerHTML=`${n.n||0} bài trong kho · làm mới mỗi ${n.refresh_min} phút · cập nhật ${n.ts?agoT(n.ts):'—'}`;
+  const st=Object.entries(n.status||{});
+  const bad=st.filter(([k,v])=>!v.ok);
+  mk_.innerHTML=`<b>Tâm lý thị trường</b> · Fear &amp; Greed <b>${m.fng??'—'}</b> ${esc(m.fng_cls||'')} · tin 12h <b class="${(m.mkt_news||0)>=0?'up':'dn'}">${(m.mkt_news||0)>=0?'+':''}${f(m.mkt_news||0,2)}</b> (${m.mkt_news_n||0} bài)`+
+    ((n.hot||[]).length?`<br><b>Coin được nhắc nhiều (24h)</b>: ${n.hot.map(([c,k,b])=>`${esc(c)} <span class="${b>=0?'up':'dn'}">${k} bài ${b>=0?'+':''}${f(b,2)}</span>`).join(' · ')}`:'')+
+    `<br><span class="muted small">Nguồn: ${st.map(([k,v])=>`<span title="${esc(v.err||'')}" class="${v.ok?'':'dn'}">${esc(k)}${v.ok?'':' ✗'}</span>`).join(' · ')||'chưa tải'}</span>`+
+    (bad.length?`<br><span class="dn small">⚠ Lỗi: ${bad.map(([k,v])=>esc(k)+': '+esc(v.err)).join(' | ')}</span>`:'');
+  const rows=n.headlines||[];
+  el.innerHTML=rows.length?rows.map(h=>`<div class="row"><div class="t" style="font-weight:500;white-space:normal">${h.url?`<a href="${esc(h.url)}" target="_blank" rel="noopener noreferrer">${esc(h.title)}</a>`:esc(h.title)}</div>
+    <div class="r ${h.score>0.1?'up':h.score<-0.1?'dn':''}">${h.score>=0?'+':''}${f(h.score,2)}</div>
+    <div class="m">${esc(h.src)}${h.kind==='ann'?' <span class="pill gold" style="font-size:10px">thông báo sàn</span>':''} · ${t(h.ts)}${(h.coins||[]).length?' · '+h.coins.map(esc).join(', '):''}${(h.events||[]).length?' · <b>'+h.events.map(e=>esc(EV[e]||e)).join(', ')+'</b>':''}</div></div>`).join('')
+   :'<div class="empty">Chưa có tin – bot tải tin mỗi vài phút sau khi khởi động.</div>';
 }
-const SRC={taken:'Đã vào lệnh',ai_override:'Vào dù AI phản đối yếu',ai_rejected:'AI từ chối',ai_error:'AI lỗi/hết lượt',not_sent:'Không gửi AI',blocked:'Luật tự học chặn',below_score:'Suýt đạt'};
+const SRC={taken:'Đã vào lệnh',unfilled:'Sàn/ngân sách từ chối',not_taken:'Xếp sau',blocked:'Luật chặn',below_score:'Suýt đạt',
+  ai_override:'(cũ) vượt AI',ai_weak:'(cũ) AI chưa chắc',ai_rejected:'(cũ) AI từ chối',ai_error:'(cũ) AI lỗi',not_sent:'(cũ) không gửi AI'};
 const OUT={TP:'TP',SL:'SL',TIMEOUT:'Hết giờ',PENDING:'Đang theo dõi',NODATA:'Không dữ liệu'};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(path,body){const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{cache:'no-store'});return r.json()}
@@ -141,18 +145,18 @@ function renderLearn(L){
   const st=L.stats||{},p=L.params,tot=(st.total||{}).n||0,pend=st.pending||0;
   const MODE={auto:'tự áp dụng',suggest:'chờ duyệt',off:'tắt'};
   sub.innerHTML=`${MODE[L.mode]||L.mode} · ${tot} kết quả · ${pend} đang theo dõi`;
-  const tech=st.tech||{},av=st.ai_veto||{};
+  const tech=st.tech||{},ne=st.news_effect||{};
   const pending=(L.log||[]).filter(r=>r.status==='pending');
-  const KIND={block:'Chặn',unblock:'Bỏ chặn',trigger_w:'Trọng số',min_score:'Ngưỡng điểm',exit_mode:'Cách thoát lệnh',ai_veto_conf:'Ngưỡng phủ quyết AI',tp1_r:'Mức TP1',reset:'Khôi phục'};
+  const KIND={block:'Chặn',unblock:'Bỏ chặn',trigger_w:'Trọng số',min_score:'Ngưỡng điểm',exit_mode:'Cách thoát lệnh',tp1_r:'Mức TP1',news_w:'Trọng số tin tức',ai_veto_conf:'(cũ) Ngưỡng phủ quyết AI',migrate:'Nâng cấp',reset:'Khôi phục'};
   let h=`<div class="note">
     ${tot<L.min_samples?`Bot đang thu thập kết quả của mọi tín hiệu (kể cả tín hiệu không vào lệnh). Cần ít nhất <b>${L.min_samples}</b> kết quả cho mỗi nhóm trước khi tự điều chỉnh – hiện có <b>${tot}</b>.<br>`:''}
     Tín hiệu kỹ thuật: <b>${tech.n||0}</b> kết quả · thắng <b>${tech.winrate||0}%</b> · kỳ vọng <b class="${(tech.exp_r||0)>=0?'up':'dn'}">${(tech.exp_r||0)>=0?'+':''}${f(tech.exp_r||0,2)}R</b>/tín hiệu
-    ${av.veto_accuracy!=null?`<br>AI chặn đúng <b>${av.veto_accuracy}%</b> (${av.rejected.n} lần chặn, những lệnh đó nếu vào sẽ có kỳ vọng ${f(av.rejected.exp_r,2)}R)`:''}
-    ${av.veto_conf!=null?`<br>Ngưỡng phủ quyết AI: <b>${av.veto_conf}%</b> – AI phản đối dưới mức này thì tín hiệu điểm ≥ ${(L.params||{}).ai_override_min_score??6.5} vẫn vào${av.override&&av.override.n?` (đã vào ${av.override.n} lệnh như vậy, kỳ vọng ${f(av.override.exp_r,2)}R)`:''}`:''}
+    ${(ne.n_aligned||ne.n_against)?`<br>Tin cùng chiều <b class="${ne.exp_aligned>=0?'up':'dn'}">${ne.exp_aligned>=0?'+':''}${f(ne.exp_aligned,2)}R</b> (${ne.n_aligned} mẫu) vs ngược chiều <b class="${ne.exp_against>=0?'up':'dn'}">${ne.exp_against>=0?'+':''}${f(ne.exp_against,2)}R</b> (${ne.n_against} mẫu) · chênh ${ne.diff>=0?'+':''}${f(ne.diff,2)}R, t = ${ne.t} – trọng số tin chỉ đổi khi |t| ≥ 2`:'<br>Chưa đủ tín hiệu có tin tức để đo tác động của tin (cần mỗi nhóm cùng/ngược chiều ≥ 15 mẫu).'}
   </div>
   <div class="chips" style="padding:0 20px 14px">
     <span class="pill gold">Ngưỡng điểm ${p.min_score}${p.min_score!=p.min_score_default?` (mặc định ${p.min_score_default})`:''}</span>
     <span class="pill gold">Thoát: ${(L.exit_names||{})[(st.exit_compare||{}).current||p.exit_mode||'hybrid']||'—'}</span>
+    <span class="pill gold">Trọng số tin ×${p.news_w}${p.news_w!=p.news_w_default?` (mặc định ${p.news_w_default})`:''}</span>
     ${(p.blocks||[]).map(k=>`<span class="pill" style="color:var(--dn)">Chặn: ${esc(L.rules[k]||k)}</span>`).join('')}
     ${Object.entries(p.trigger_w||{}).map(([k,v])=>`<span class="pill">${esc(L.trigger_names[k]||k)} ×${v}</span>`).join('')}
   </div>`;
@@ -168,36 +172,35 @@ function renderLearn(L){
     <table class="mini"><tr><th>TP1</th><th>Thắng</th><th>Kỳ vọng/lệnh</th><th>Tổng</th></tr>${Object.entries(tc.levels||{}).map(([k,v])=>`<tr><td>${k}R${+k===cur?' <span class="pill gold" style="font-size:10px">đang dùng</span>':''}</td><td>${v.winrate}%</td><td class="${v.exp_r>0?'up':v.exp_r<0?'dn':''}">${v.exp_r>=0?'+':''}${f(v.exp_r,2)}R</td><td>${v.sum_r>=0?'+':''}${f(v.sum_r,1)}R</td></tr>`).join('')}</table>
     <div class="note small muted" style="padding-top:8px">TP1 thấp → thắng nhiều hơn nhưng lãi mỗi lệnh nhỏ hơn. Bot chọn mức có <b>kỳ vọng (lợi nhuận) cao nhất</b>, không chỉ tỉ lệ thắng – đổi khi đủ ≥20 tín hiệu và chênh ≥0,1R.</div></details>`}
   const d=L.daily;
-  if(d) h+=`<details open><summary>AI tổng kết ngày · ${t(d.ts)}</summary><div class="note">${esc(d.summary)}
-    ${(d.observations||[]).length?`<ul style="margin:8px 0 0;padding-left:18px">${d.observations.map(o=>`<li>${esc(o)}</li>`).join('')}</ul>`:''}
-    ${(d.suggestions||[]).map(s=>`<div style="margin-top:10px;display:flex;gap:8px;align-items:center;justify-content:space-between"><span>Gợi ý: <b>${s.param}=${esc(s.value)}</b> – ${esc(s.why)}</span><button class="act" onclick="lnSug('${s.param}','${esc(s.value)}')">Áp dụng</button></div>`).join('')}</div></details>`;
+  if(d) h+=`<details open><summary>Báo cáo ngày (tự động, theo số liệu) · ${t(d.ts)}</summary><div class="note">${esc(d.summary)}
+    ${(d.observations||[]).length?`<ul style="margin:8px 0 0;padding-left:18px">${d.observations.map(o=>`<li>${esc(o)}</li>`).join('')}</ul>`:''}</div></details>`;
   h+=`<details><summary>Kết quả theo nguồn tín hiệu</summary>${statRows(st.by_source,'Nguồn')||'<div class="empty">Chưa có dữ liệu</div>'}</details>
   <details><summary>Theo luật lọc (ứng viên để chặn)</summary>${statRows(st.by_rule,'Luật')||'<div class="empty">Chưa có dữ liệu</div>'}</details>
   <details><summary>Theo trigger</summary>${statRows(st.by_trigger,'Trigger')||'<div class="empty">Chưa có dữ liệu</div>'}</details>
+  <details><summary>Theo tin tức · Fear &amp; Greed</summary>${statRows(st.by_news,'Tin tức')||''}${statRows(st.by_fng,'Fear & Greed')||''}${!(Object.keys(st.by_news||{}).length||Object.keys(st.by_fng||{}).length)?'<div class="empty">Chưa có dữ liệu</div>':''}</details>
   <details><summary>Theo hướng · khung giờ · điểm</summary>${statRows(st.by_side,'Hướng')}${statRows(st.by_session,'Khung giờ')}${statRows(st.by_score,'Điểm')}</details>
   <details><summary>Lịch sử thay đổi (${(L.log||[]).length})</summary>${(L.log||[]).length?`<div class="list">${L.log.map(r=>`<div class="row"><div class="t">${KIND[r.kind]||r.kind} <span class="pill" style="font-size:10px">${{applied:'đã áp dụng',pending:'chờ duyệt',rejected:'đã bỏ qua'}[r.status]||r.status}</span></div><div class="r"><small>${t(r.ts)}</small></div><div class="m">${esc(r.reason)}</div></div>`).join('')}</div>`:'<div class="empty">Chưa có thay đổi nào.</div>'}</details>
   <div style="display:flex;gap:8px;padding:14px 20px 18px;border-top:1px solid var(--line);flex-wrap:wrap"><button class="act" onclick="lnAct('run')">Phân tích ngay</button><button class="act warn" onclick="if(confirm('Khôi phục toàn bộ tham số về mặc định?'))lnAct('reset')">Khôi phục mặc định</button></div>`;
   b.innerHTML=h;
 }
 async function lnAct(a,ts){await api('api/learn/'+a,{ts});load()}
-async function lnSug(param,value){await api('api/learn/suggest',{param,value});load()}
 
 function renderLog(){
   const el=$('log');if(!el||!D)return;$('evFilters').style.display=tab==='events'?'flex':'none';let rows=[];
   if(tab==='trades'){rows=D.trades.filter(x=>x.status==='closed');$('histN').textContent=rows.length?rows.length+' lệnh':'';
     el.innerHTML=rows.length?rows.map(x=>`<div class="row"><div class="t">${sideTag(x.side)} ${x.symbol.split('/')[0]} <span style="color:var(--mut);font-weight:500;font-size:12px">${t(x.closed_at)}</span></div>
       <div class="r ${x.pnl>=0?'up':'dn'}">${x.pnl>=0?'+':''}${f(x.pnl,4)}<small>${x.pnl>=0?'+':''}${f(x.pnl_pct,1)}% ký quỹ</small></div>
-      <div class="m">${x.reason_close} · vào ${px(x.entry)} → ra ${px(x.exit)} · AI ${(x.ai_model||'—').split('/').slice(-1)[0]} ${x.ai_conf||''}%</div></div>`).join(''):'<div class="empty">Chưa có lệnh nào đóng.</div>'}
+      <div class="m">${x.reason_close} · vào ${px(x.entry)} → ra ${px(x.exit)} · điểm ${x.score??'—'}${x.news!=null?` · tin ${x.news>=0?'+':''}${f(x.news,2)}`:x.ai_model?` · (cũ) AI ${x.ai_conf??''}%`:''}</div></div>`).join(''):'<div class="empty">Chưa có lệnh nào đóng.</div>'}
   else if(tab==='signals'){rows=D.signals;$('histN').textContent='';
     el.innerHTML=rows.length?rows.map(x=>{const o=x.outcome||'';const rr=x.outcome_r;let fe={};try{fe=JSON.parse(x.features||'{}')}catch(e){}
       return `<div class="row"><div class="t">${sideTag(x.side)} ${x.symbol.split('/')[0]} <span style="color:var(--mut);font-weight:500;font-size:12px">${t(x.ts)} · điểm ${x.score}</span></div>
       <div class="r">${o?`<span class="out ${o}">${OUT[o]||o}${rr!=null&&o!=='PENDING'?' '+(rr>=0?'+':'')+f(rr,2)+'R':''}</span>`:''}<small>${SRC[x.source]||(x.taken?'Đã vào':'Bỏ qua')}</small></div>
-      <div class="m">${x.ai_decision?`AI ${x.ai_decision} ${x.ai_conf??''}% · `:''}${fe.rejected?fe.rejected+' · ':''}${x.ai_reason||''}</div></div>`}).join(''):'<div class="empty">Chưa có tín hiệu nào qua bộ lọc.</div>'}
+      <div class="m">${fe.news_n?`tin ${fe.news_bias>=0?'+':''}${f(fe.news_bias,2)} (${fe.news_n} bài)${(fe.news_events||[]).length?' ['+fe.news_events.map(esc).join(', ')+']':''} · `:''}${fe.rejected?esc(fe.rejected)+' · ':''}${esc(x.reason||'')}${x.ai_decision?`(cũ) AI ${x.ai_decision} ${x.ai_conf??''}% · ${esc(x.ai_reason||'')}`:''}</div></div>`}).join(''):'<div class="empty">Chưa có tín hiệu nào qua bộ lọc.</div>'}
   else if(tab==='events'){renderEvents();return}
   else if(tab==='scans'){renderScans();return}
   else{rows=D.reviews||[];$('histN').textContent='';
     el.innerHTML=rows.length?rows.map(x=>`<div class="row"><div class="t">${sideTag(x.side)} ${x.symbol.split('/')[0]} <span class="pill">${x.verdict||''}</span></div>
-      <div class="r ${x.pnl>=0?'up':'dn'}">${x.pnl>=0?'+':''}${f(x.pnl,4)}</div><div class="m">${x.lesson||''}${x.tags?` <span style="color:var(--mut)">#${x.tags.split(',').join(' #')}</span>`:''}</div></div>`).join(''):'<div class="empty">AI sẽ tổng kết sau mỗi lệnh đóng.</div>'}
+      <div class="r ${x.pnl>=0?'up':'dn'}">${x.pnl>=0?'+':''}${f(x.pnl,4)}</div><div class="m">${esc(x.lesson||'')}${x.tags?` <span style="color:var(--mut)">#${esc(x.tags).split(',').join(' #')}</span>`:''}</div></div>`).join(''):'<div class="empty">Bot tổng kết (theo số liệu) sau mỗi lệnh đóng.</div>'}
 }
 
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected','false'));b.setAttribute('aria-selected','true');tab=b.dataset.t;renderLog()});
@@ -210,7 +213,7 @@ SKEL = '<div class="skel"></div><div class="skel" style="width:70%"></div>'
 
 
 def _home_body():
-    tiles = ui.card("Hiệu suất & AI", '<div class="kpis" id="tiles">' + SKEL + "</div>",
+    tiles = ui.card("Hiệu suất & tin tức", '<div class="kpis" id="tiles">' + SKEL + "</div>",
                     sub="", sub_id="meta")
     equity = ui.card("Đường vốn", '<div class="chart"><svg id="svg" preserveAspectRatio="none" role="img" '
                      'aria-label="Biểu đồ vốn theo thời gian"></svg><div class="tip" id="tip"></div></div>',
@@ -221,14 +224,14 @@ def _home_body():
     logs = ui.card("Nhật ký",
                    '<div class="tabs" role="tablist" aria-label="Loại nhật ký">'
                    '<button class="tab" role="tab" aria-selected="true" data-t="trades">Lệnh đã đóng</button>'
-                   '<button class="tab" role="tab" aria-selected="false" data-t="signals">Tín hiệu & AI</button>'
-                   '<button class="tab" role="tab" aria-selected="false" data-t="reviews">Bài học AI</button>'
+                   '<button class="tab" role="tab" aria-selected="false" data-t="signals">Tín hiệu</button>'
+                   '<button class="tab" role="tab" aria-selected="false" data-t="reviews">Tổng kết lệnh</button>'
                    '<button class="tab" role="tab" aria-selected="false" data-t="events">Hoạt động</button>'
                    '<button class="tab" role="tab" aria-selected="false" data-t="scans">Lịch sử quét</button></div>'
                    '<div class="filters" id="evFilters" style="display:none">'
                    '<select id="evLv" aria-label="Lọc theo mức"><option value="">Tất cả mức</option><option>INFO</option>'
                    '<option>WARNING</option><option>ERROR</option></select>'
-                   '<input id="evQ" type="search" aria-label="Tìm trong nhật ký" placeholder="Tìm trong nhật ký… (vd: STRK, AI từ chối)"></div>'
+                   '<input id="evQ" type="search" aria-label="Tìm trong nhật ký" placeholder="Tìm trong nhật ký… (vd: STRK, luật chặn, tin)"></div>'
                    '<div class="list" id="log" aria-live="polite">' + SKEL + "</div>",
                    sub_id="histN", flush=True)
     return (ui.hero("Tổng quan", "Đang tải trạng thái bot…", eyebrow="Bảng điều khiển", lead_id="sub")
@@ -239,13 +242,14 @@ def _home_body():
             + f'<div class="mt">{tiles}</div><div class="mt">{logs}</div>')
 
 
-def _ai_body():
-    ai = ui.card("Bộ lọc AI", '<div id="aiLast" class="note" style="padding-top:2px">' + SKEL + '</div>'
-                 '<div class="list" id="aiModels"></div>', sub_id="aiSub", flush=True)
+def _news_body():
+    news = ui.card("Tin tức", '<div id="nwMarket" class="note" style="padding-top:2px">' + SKEL + '</div>'
+                   '<div class="list" id="nwList"></div>', sub_id="nwSub", flush=True)
     learn = ui.card("Tự học", '<div id="lnBody">' + SKEL + "</div>", sub_id="lnSub", flush=True)
-    return (ui.hero("AI & Tự học", "Model AI nào đang trả lời, AI duyệt/chặn ra sao, và những gì bot tự rút ra "
-                    "từ kết quả của mọi tín hiệu.", eyebrow="Phân tích", lead_id="sub")
-            + f'<div class="grid g-wide">{learn}{ai}</div>')
+    return (ui.hero("Tin tức & Tự học", "Bot quyết định thuần kỹ thuật + tin tức (không AI): tâm lý thị trường, tin của "
+                    "từng coin, và những gì bot tự rút ra từ kết quả thật của mọi tín hiệu.", eyebrow="Phân tích",
+                    lead_id="sub")
+            + f'<div class="grid g-wide">{learn}{news}</div>')
 
 
 
@@ -343,12 +347,14 @@ def _settings_body(bot, msg="", ok=True):
     params = [
         ("Điểm tối thiểu", cfg.MIN_SCORE, L.get("min_score")),
         ("TP1 (R)", cfg.TP1_R, L.get("tp1_r")),
-        ("Ngưỡng AI được chặn (%)", "65 (ảo) / 0 (thật)", L.get("ai_veto_conf")),
+        ("Trọng số tin tức (0–2)", cfg.NEWS_WEIGHT, L.get("news_w")),
+        ("Điểm tin tối đa (± × trọng số)", cfg.NEWS_SCORE_MAX, None),
         ("SL tối thiểu / tối đa (ATR)", f"{cfg.ATR_SL_MULT:g} / {cfg.MAX_SL_ATR:g}", None),
         ("Rủi ro mỗi lệnh", f"{cfg.RISK_PER_TRADE * 100:.0f}%", None),
         ("Đòn bẩy · lệnh tối đa", f"x{cfg.LEVERAGE} · {cfg.MAX_OPEN_POSITIONS}", None),
         ("Số coin quét", cfg.TOP_N_COINS, None),
-        ("AI duyệt khi chất lượng ≥", cfg.AI_MIN_CONFIDENCE, None),
+        ("Tin tức: làm mới · cửa sổ · half-life", f"{cfg.NEWS_REFRESH_MIN:g} phút · {cfg.NEWS_WINDOW_H:g}h · {cfg.NEWS_HALF_LIFE_H:g}h", None),
+        ("Đóng lệnh khi có tin mới", ", ".join(cfg.NEWS_EXIT_EVENTS) or "tắt", None),
         ("Luật đang chặn", ", ".join(sorted(strategy.active_blocks())) or "—", None),
     ]
     prow = [f"<tr><td>{ui.e(n)}</td><td class='num'>{ui.e(str(d))}</td>"
@@ -359,7 +365,7 @@ def _settings_body(bot, msg="", ok=True):
                           sub="Cột “Tự học” (nếu có) là giá trị bot đang dùng thật", flush=True)
 
     dls = [("trades", "Lệnh giao dịch"), ("signals", "Tín hiệu + kết quả"), ("scans", "Lịch sử quét"),
-           ("events", "Nhật ký hoạt động"), ("equity", "Đường vốn"), ("reviews", "Bài học AI"),
+           ("events", "Nhật ký hoạt động"), ("equity", "Đường vốn"), ("reviews", "Tổng kết lệnh"),
            ("learn_log", "Lịch sử tự học")]
     dl = '<div class="dls">' + "".join(f'<a class="dl" href="api/export/{k}.csv">{ui.e(n)}<small>{k}.csv</small></a>'
                                       for k, n in dls) +          '<a class="dl" href="api/export/all.json">Sao lưu toàn bộ<small>all.json</small></a></div>'
@@ -451,11 +457,15 @@ def build_app(bot):
             return _login_page()
         return HTMLResponse(ui.page("Tổng quan", _home_body(), active="home", mode=_mode(), scripts=APP_JS))
 
-    @app.get("/ai", response_class=HTMLResponse)
-    def ai_page(request: Request):
+    @app.get("/tintuc", response_class=HTMLResponse)
+    def news_page(request: Request):
         if not _authed(request):
             return _login_page()
-        return HTMLResponse(ui.page("AI & Tự học", _ai_body(), active="ai", mode=_mode(), scripts=APP_JS))
+        return HTMLResponse(ui.page("Tin tức & Tự học", _news_body(), active="news", mode=_mode(), scripts=APP_JS))
+
+    @app.get("/ai")
+    def ai_page_old():                       # đường dẫn cũ (v3.x) → trang mới
+        return RedirectResponse(url="tintuc", status_code=307)
 
     @app.get("/caidat", response_class=HTMLResponse)
     def settings_page(request: Request, msg: str = "", ok: int = 1):
@@ -569,8 +579,6 @@ def build_app(bot):
             L.reset(); n = 1
         elif action == "run":
             L.resolve_pending(); n = len(L.learn() if L.mode != "off" else L.compute_stats() and [])
-        elif action == "suggest":
-            n = int(L.apply_suggestion(body.get("param"), body.get("value")))
         else:
             return JSONResponse({"error": "hành động không hợp lệ"}, status_code=400)
         return JSONResponse({"ok": True, "n": n})

@@ -155,7 +155,7 @@ h3{font:600 11px/1 "Be Vietnam Pro",sans-serif;letter-spacing:.14em;text-transfo
 .pill{display:inline-block;font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);
   color:var(--ink-2);letter-spacing:.03em;font-weight:600;white-space:nowrap}
 .pill.gold{border-color:var(--gold);color:var(--brand-text);background:var(--brand-soft)}
-.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}.chips .pill{white-space:normal;max-width:100%}
 .side{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:6px;letter-spacing:.06em}
 .side.long{background:var(--up-soft);color:var(--up)}.side.short{background:var(--down-soft);color:var(--down)}
 .out{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;letter-spacing:.04em;white-space:nowrap}
@@ -255,7 +255,7 @@ SUN = ('<svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
 MOON = ('<svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">'
         '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>')
 
-NAV = (("home", "./", "Tổng quan"), ("ai", "ai", "AI & Tự học"), ("settings", "caidat", "Cài đặt"),
+NAV = (("home", "./", "Tổng quan"), ("news", "tintuc", "Tin tức & Tự học"), ("settings", "caidat", "Cài đặt"),
        ("version", "phienban", "Phiên bản"))
 
 
@@ -277,7 +277,7 @@ def page(title, body, *, active="", mode="paper", scripts=""):
         '<a class="skip" href="#main">Bỏ qua tới nội dung</a>'
         '<header class="top"><div class="top-in">'
         '<a class="brand" href="./"><span class="mark" aria-hidden="true">OKX</span>'
-        '<span class="brand-name">OKX Altcoin Bot<small>Futures · AI · Tự học</small></span></a>'
+        '<span class="brand-name">OKX Altcoin Bot<small>Futures · Kỹ thuật · Tin tức · Tự học</small></span></a>'
         f'{pill}<nav class="nav" aria-label="Trang">{links}</nav>'
         f'<button class="icon-btn" id="theme-toggle" type="button" aria-label="Đổi giao diện sáng/tối">{MOON}{SUN}</button>'
         f'</div></header><main id="main">{body}</main>'
