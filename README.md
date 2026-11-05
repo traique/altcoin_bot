@@ -261,6 +261,11 @@ check_db.py       – kiểm tra kết nối Supabase trước khi deploy
 
 Danh sách repo tương tự (bot TA, bot tin tức không dùng LLM, tự tối ưu tham số) đã kiểm chứng sao/ngày cập nhật/giấy phép, và những gì bot này đã/có thể học từ chúng: xem [THAM_KHAO.md](THAM_KHAO.md).
 
+## 13. Kiểm chứng trên 90 ngày lịch sử (walk-forward)
+
+`tools/walkforward.py` chấm lại 40 coin × 89 ngày (08–11/2026) bằng đúng code của bot. Kết quả: [tools/wf_results/2026-11-05/BAO_CAO.md](tools/wf_results/2026-11-05/BAO_CAO.md).
+Tóm tắt: tối ưu tham số **không** thắng mặc định ngoài mẫu (−4,5R so với +1,6R trong 59 ngày); phần kỹ thuật ≈ hoà vốn; lớp bảo vệ khoá phía sau 3 lệnh thua/12h dương ở cả hai nửa thời gian (+10,6R so với +2,7R toàn kỳ); nhiều kết luận rút từ vài ngày (phiên 13–19h, xu hướng 1h đã chạy lâu) đảo dấu khi xét 89 ngày.
+
 ---
 
 # Lịch sử các bản trước

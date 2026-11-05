@@ -171,15 +171,17 @@ def _coin_events(job):
     from bot.config import cfg
     from bot import strategy as S, exits
     from bot.indicators import to_frame, enrich
+    from bot.protections import first_barrier
     cfg.RANGE_ENABLED = False                               # setup range đang bị chặn sẵn – chỉ tối ưu setup xu hướng
     S.LEARNED.update(min_score=-99.0, trigger_w={}, gates={
         k: (-1e9 if g[1] == "min" else 1e9) for k, g in S.GATES.items()})
     try:
-        F = enrich(to_frame(load(data, sym, "15m")))
-        H = enrich(to_frame(load(data, sym, "1h")))
-        m5 = load(data, sym, "5m")
+        raw15, raw1h, m5 = load(data, sym, "15m"), load(data, sym, "1h"), load(data, sym, "5m")
     except FileNotFoundError:
         return []
+    if len(raw15) < 300 or len(raw1h) < 130:                 # coin mới niêm yết – không đủ dữ liệu
+        return []
+    F, H = enrich(to_frame(raw15)), enrich(to_frame(raw1h))
     m5ts = [r[0] for r in m5]
     cost = 2 * cfg.TAKER_FEE + cfg.SLIPPAGE
     out, j = [], -1
@@ -219,6 +221,7 @@ def _coin_events(job):
         k0 = bisect.bisect_left(m5ts, tc - TF_MS["5m"])
         cs = m5[k0:k0 + 12 * 27]                                  # 27h nến 5m sau tín hiệu (lệnh bám sóng tối đa 24h)
         t0 = tc / 1000
+        ev["fb"], ev["fb_ts"] = first_barrier(sig.side, sig.price, sig.sl, t0, cs)   # cho mô phỏng lớp bảo vệ
         for ex in EXITS:
             mode, _, v = ex.partition(":")
             lab, R, tx = exits.simulate(sig.side, sig.price, sig.sl, a, mode, t0, cs, cost,
@@ -303,6 +306,9 @@ class Book:
         sid = {s: i for i, s in enumerate(syms)}
         self.key = np.array([sid[e["sym"]] * 2 + (e["side"] == "short") for e in events])
         self.sym = [e["sym"] for e in events]
+        self.side = [e["side"] for e in events]
+        self.fb = [e.get("fb") for e in events]
+        self.fb_ts = [e.get("fb_ts") or 1e18 for e in events]
 
     def mask(self, p, t0, t1):
         m = (self.ts >= t0) & (self.ts < t1)
@@ -337,32 +343,75 @@ class Book:
                 "winrate": round(100 * float((r > 0).mean()), 1),
                 "t": round(float(r.mean() / (sd / n ** 0.5)), 2) if sd > 0 else 0.0}
 
-    def portfolio(self, m, exit_, max_open=2, cooldown=7200):
+    def portfolio(self, m, exit_, max_open=2, cooldown=7200, protect=None, blocked_out=None):
         """Mô phỏng danh mục như bot: tối đa `max_open` lệnh mở, mỗi coin chờ 2h sau khi vào, chọn điểm cao nhất,
-        mỗi lệnh rủi ro 1R. Trả về danh sách lệnh (ts vào, coin, hướng, điểm, R, ts ra)."""
+        mỗi lệnh rủi ro 1R. protect: tham số lớp bảo vệ (như bot/protections.py) hoặc None. blocked_out: list nhận
+        chỉ số tín hiệu bị lớp bảo vệ chặn. Trả về danh sách lệnh (ts vào, coin, hướng, điểm, R, ts ra)."""
+        import bisect
         idx = self.np.flatnonzero(m)
         by_t = {}
         for i in idx:
             by_t.setdefault(self.ts[i], []).append(i)
-        open_, last_in, trades = [], {}, []
+        sh = self.dedup(m) if protect else []        # tín hiệu "bóng" bot ghi (mỗi coin-hướng 1 lần/giờ)
+        sh_ts = [self.ts[i] for i in sh]
+        open_, last_in, trades, closed = [], {}, [], []
+        locks, last_lock, seen_block = {}, {}, set()
+        P = protect or {}
+
+        def side_locked(side, t):
+            if locks.get(side, 0) > t:
+                return True
+            lo = max(t - P["side_hours"] * 3600, last_lock.get(side, -1e18))
+            if P.get("side_losses") and sum(1 for x, s, sd, R in closed if sd == side and R < 0 and lo < x <= t) \
+                    >= P["side_losses"]:
+                locks[side], last_lock[side] = t + P["lock_hours"] * 3600, t
+                return True
+            if P.get("shadow_min"):
+                lo2 = max(t - P["shadow_hours"] * 3600, last_lock.get(side, -1e18))
+                latest = {}
+                for k in range(bisect.bisect_left(sh_ts, lo2), bisect.bisect_right(sh_ts, t)):
+                    i = sh[k]
+                    if self.side[i] == side and self.fb[i] and self.fb_ts[i] <= t:
+                        latest[self.sym[i]] = self.fb[i]
+                n = len(latest)
+                if n >= P["shadow_min"] and sum(1 for h in latest.values() if h == "SL") / n >= P["shadow_share"]:
+                    locks[side], last_lock[side] = t + P["lock_hours"] * 3600, t
+                    return True
+            return False
+
+        def pair_locked(s, t):
+            if not P.get("pair_hours"):
+                return False
+            mine = sorted((x, R) for x, ss, sd, R in closed if ss == s and x <= t)
+            losses = [x for x, R in mine if R < 0 and t - x < P.get("repeat_hours", 24) * 3600]
+            if len(losses) >= 2:
+                return True
+            return bool(mine) and mine[-1][1] < 0 and t - mine[-1][0] < P["pair_hours"] * 3600
+
         for t in sorted(by_t):
             open_ = [o for o in open_ if o[0] > t]
             slots = max_open - len(open_)
-            if slots <= 0:
-                continue
             busy = {o[1] for o in open_}
+            lk = {sd: side_locked(sd, t) for sd in ("long", "short")} if protect else {}
             for i in sorted(by_t[t], key=lambda i: -self.score[i]):
-                s = self.sym[i]
-                if slots <= 0:
-                    break
+                s, side = self.sym[i], self.side[i]
                 if s in busy or t - last_in.get(s, -1e18) < cooldown:
                     continue
+                if protect and (lk[side] or pair_locked(s, t)):
+                    if blocked_out is not None and (s, side, int(t // 3600)) not in seen_block:
+                        seen_block.add((s, side, int(t // 3600)))
+                        blocked_out.append(i)
+                    continue
+                if slots <= 0:
+                    break
                 x = self.X[exit_][i]
+                R = float(self.R[exit_][i])
                 open_.append((x, s))
                 busy.add(s)
                 last_in[s] = t
                 slots -= 1
-                trades.append((int(t), s, self.ev[i]["side"], float(self.score[i]), float(self.R[exit_][i]), int(x)))
+                closed.append((x, s, side, R))
+                trades.append((int(t), s, side, float(self.score[i]), R, int(x)))
         return trades
 
 
@@ -504,10 +553,41 @@ def cmd_optimize(a):
                      "thang_%": s["winrate"], "t": s["t"]})
     _csv(os.path.join(a.out, "phan_tich_mac_dinh.csv"), rows)
 
+    # ---- 3f. lớp bảo vệ (bot/protections.py) trên danh mục – tham số mặc định, toàn kỳ và đoạn ngoài mẫu
+    from bot.config import cfg as C
+    base_p = dict(side_losses=C.PROTECT_SIDE_LOSSES, side_hours=C.PROTECT_SIDE_HOURS, shadow_min=C.PROTECT_SHADOW_MIN,
+                  shadow_share=C.PROTECT_SHADOW_SL_SHARE, shadow_hours=C.PROTECT_SHADOW_HOURS,
+                  lock_hours=C.PROTECT_LOCK_HOURS, pair_hours=C.PROTECT_PAIR_LOSS_HOURS,
+                  repeat_hours=C.PROTECT_PAIR_REPEAT_HOURS)
+    variants = [("không bảo vệ", None), ("đủ lớp bảo vệ (mặc định v4.1)", base_p),
+                ("chỉ khoá phía theo tín hiệu bóng", {**base_p, "side_losses": 0, "pair_hours": 0}),
+                ("chỉ khoá phía theo lệnh thua", {**base_p, "shadow_min": 0, "pair_hours": 0}),
+                ("chỉ khoá coin vừa thua", {**base_p, "side_losses": 0, "shadow_min": 0}),
+                ("khoá phía nhạy hơn: ≥70%, ≥8 coin", {**base_p, "shadow_share": 0.7, "shadow_min": 8}),
+                ("khoá phía chặt hơn: ≥85%, ≥12 coin", {**base_p, "shadow_share": 0.85, "shadow_min": 12}),
+                ("khoá phía 12h thay vì 6h", {**base_p, "lock_hours": 12})]
+    prow = []
+    for label, pp in variants:
+        for wname, w0, w1, dd in (("toàn kỳ", t_start, t_end, span), ("ngoài mẫu (từ ngày 30)", first_test, t_end,
+                                                                         (t_end - first_test) / day)):
+            blk = []
+            tr = B.portfolio(B.mask(D, w0, w1), D["exit"], protect=pp, blocked_out=blk)
+            ps = pstats(tr, dd)
+            bs = B.stats(blk, D["exit"])
+            prow.append({"bien_the": label, "giai_doan": wname, **ps, "bi_chan_n": bs["n"], "bi_chan_ky_vong_R": bs["exp_r"],
+                         "bi_chan_tong_R": bs["sum_r"]})
+            print(f"bảo vệ | {label:38s} | {wname:22s} | lệnh {ps['trades']:3d} tổng {ps['sum_r']:+7.2f}R "
+                  f"DD {ps['max_dd_r']:+6.2f}R chuỗi thua {ps['worst_streak']:2d} | chặn {bs['n']:3d} tín hiệu {bs['exp_r']:+.3f}R",
+                  flush=True)
+    _csv(os.path.join(a.out, "lop_bao_ve.csv"), prow)
+    summary["protect"] = prow
+    with open(os.path.join(a.out, "tong_hop.json"), "w") as fh:
+        json.dump(summary, fh, ensure_ascii=False, indent=1)
+
     # ---- 3e. toàn bộ tín hiệu ứng viên (để anh tự lọc trên Excel / Google Sheets)
     with gzip.open(os.path.join(a.out, "tin_hieu_ung_vien.csv.gz"), "wt", newline="") as fh:
         cols = ["time_vn", "sym", "side", "score", "trig", "hour", "adx", "atr_pct", "vol_ratio", "ext_atr", "chase",
-                "btc_v", "rsi_m", "wick", "sl_atr", "rules"] + ["R_" + x for x in EXITS]
+                "btc_v", "rsi_m", "wick", "sl_atr", "rules", "fb"] + ["R_" + x for x in EXITS]
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for e in events:
