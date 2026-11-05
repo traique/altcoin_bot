@@ -13,7 +13,7 @@
 1. **Tối ưu tham số KHÔNG thắng tham số mặc định ngoài mẫu.** Trên 59 ngày ngoài mẫu: walk-forward **−4,5R** (217 lệnh), mặc định **+1,6R** (238 lệnh). Bộ tham số "tốt nhất nhìn lại" (chọn bằng cả 89 ngày, tức quá khớp) cho **−25,3R** trên cùng giai đoạn. Ở đoạn huấn luyện, các bộ được chọn có t = 2,5–7,8, nhưng sang đoạn kiểm tra thì không giữ được. Đây là dấu hiệu điển hình của quá khớp.
 2. **Phần kỹ thuật gần như hoà vốn:** +0,011R mỗi tín hiệu (t = 0,26, 736 tín hiệu). Bộ lọc vẫn có ích: mọi tín hiệu ứng viên chưa qua lọc là **−0,054R** (t = −4,3, 7.673 tín hiệu), lọc kéo về khoảng 0. Nhưng lọc chưa tạo ra lãi.
 3. **Chế độ thị trường quyết định, không phải tham số.** Đổi bất kỳ tham số nào quanh mặc định đều cho cùng một kiểu: nửa đầu (08–09) lãi, nửa sau (10–11) lỗ. Nhiều tuần **một phía thắng, phía kia thua** (bảng ở mục 5).
-4. **Lớp bảo vệ v4.1 có ích**, cụ thể là khoá phía sau 3 lệnh thua trong 12 giờ. Tham số này được đặt **trước** khi có dữ liệu, vậy mà vẫn dương ở **cả hai nửa** (mục 3).
+4. *(Đính chính ở mục 9: với điểm số v4.2 lợi ích này không còn ở nửa sau – chưa đủ bằng chứng.)* **Lớp bảo vệ v4.1 có ích**, cụ thể là khoá phía sau 3 lệnh thua trong 12 giờ. Tham số này được đặt **trước** khi có dữ liệu, vậy mà vẫn dương ở **cả hai nửa** (mục 3).
 5. **Nhiều kết luận rút từ vài ngày dữ liệu bị đảo dấu khi xét 89 ngày** (mục 4). Điều này cho thấy các ngưỡng thống kê chặt của bộ tự học (≥ 30 mẫu, t ≥ 2, kiểm soát FDR, 48 giờ/lần) là cần thiết.
 
 ## 2. Walk-forward từng lượt
@@ -31,6 +31,8 @@
 Bộ được chọn nhảy lung tung giữa các lượt (ADX 26 → 16 → 18, chặn phiên lúc bật lúc tắt). Đó là dấu hiệu tối ưu đang khớp theo nhiễu chứ không phải tìm ra quy luật.
 
 ## 3. Lớp bảo vệ (bot/protections.py) trên danh mục, tham số mặc định
+
+*Đính chính: các số dưới đây dùng điểm số v4.1. Với điểm số v4.2, lớp bảo vệ chặn nhầm lệnh thắng ở nửa sau – xem mục 9.*
 
 | Biến thể | Toàn kỳ (89 ngày) | Ngoài mẫu (từ ngày 30) | Tín hiệu bị chặn, nếu vào thì sẽ có |
 |---|---|---|---|
@@ -103,3 +105,24 @@ Thua thường dồn vào **một phía** trong vài ngày. Lớp bảo vệ kho
 | `lenh_ngoai_mau_macdinh.csv`, `lenh_ngoai_mau_walkforward.csv` | Từng lệnh mô phỏng ngoài mẫu |
 | `tin_hieu_ung_vien.csv.gz` | 11.255 tín hiệu ứng viên: giờ VN, coin, hướng, điểm, trigger, giá trị từng cổng, rào ±1R chạm trước, R theo 7 cách thoát (mở bằng Excel / Google Sheets sau khi giải nén) |
 | `du_lieu_meta.json` | Danh sách coin, mốc thời gian |
+
+## 9. Sau khi áp dụng khuyến nghị 3 (v4.2: bỏ điểm trừ "xu hướng 1h đã chạy lâu")
+
+Dựng lại tín hiệu bằng điểm số mới và chạy lại toàn bộ (file trong `sau_khi_bo_diem_tru/`). Mỗi nửa khoảng 45 ngày.
+
+| | v4.1 (có trừ điểm) | v4.2 (bỏ trừ điểm) |
+|---|---|---|
+| Kỳ vọng mỗi tín hiệu, nửa đầu / nửa sau | +0,070R (364) / −0,048R (372) | **+0,153R (456) / −0,030R (456)** |
+| Kỳ vọng mỗi tín hiệu, toàn kỳ | +0,011R, t = 0,26 | **+0,061R, t = 1,66** |
+| Danh mục không bảo vệ, nửa đầu / nửa sau | −0,8R / +3,5R | +10,5R / −2,0R |
+| Danh mục có bảo vệ, nửa đầu / nửa sau | +4,1R / +6,5R | +14,3R / −5,9R |
+| Tín hiệu bị lớp bảo vệ chặn, nửa đầu / nửa sau | −0,20R / −0,59R | −0,09R / **+0,40R** |
+| Walk-forward ngoài mẫu: mặc định / tối ưu | +1,6R / −4,5R | −1,5R / +19,3R |
+| Nhiễu (độ lệch chuẩn) của tổng danh mục mỗi nửa | ±14R | ±15R |
+
+**Đọc kết quả:**
+- **Kỳ vọng mỗi tín hiệu** là chỉ số nhiều mẫu nhất và ít phụ thuộc thứ tự vào lệnh nhất. Chỉ số này tốt hơn ở cả hai nửa, nên giữ thay đổi.
+- **Ở cấp danh mục** (tối đa 2 lệnh mở, chọn điểm cao nhất), kết quả lẫn lộn giữa hai nửa. Mọi chênh lệch vài R đều nằm trong biên nhiễu ±15R của 45 ngày.
+- **Đính chính mục 1 và 3:** lợi ích của lớp bảo vệ **không ổn định**. Với điểm số v4.1, nó có lợi ở cả hai nửa. Với điểm số v4.2, nửa sau nó chặn nhầm lệnh thắng (+0,40R mỗi tín hiệu bị chặn). Lớp bảo vệ vẫn bật vì đó là biện pháp giới hạn rủi ro khi thị trường đổi chiều, nhưng **chưa chứng minh được là có lãi**. Bot ghi bóng mọi tín hiệu bị bảo vệ chặn (nguồn "Lớp bảo vệ"), và báo cáo tự học mỗi ngày sẽ cho biết nó đang cứu hay đang làm mất lãi.
+- **Walk-forward lần này thắng mặc định** (+19,3R so với −1,5R), ngược với lần trước (−4,5R so với +1,6R). Kết quả đảo chiều giữa hai lần chạy cho thấy tối ưu tham số trên 30 ngày không đáng tin. Vẫn giữ khuyến nghị 1: không tối ưu tham số hàng loạt.
+- Muốn bật lại điểm trừ như v3.2: đặt `LATE_TREND_PENALTY=1`.

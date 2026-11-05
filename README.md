@@ -24,7 +24,7 @@ Bot giao dịch hợp đồng tương lai (USDT-SWAP) altcoin trên OKX, đánh 
 
 **Bước 3 – Trigger** (ít nhất 1 sự kiện trong 3 nến gần nhất): MACD cắt, EMA9 cắt EMA21, breakout đỉnh/đáy 20 nến kèm volume ×1.5, pullback về EMA21/VWAP rồi bật, nến nhấn chìm.
 
-**Bước 4 – Chấm điểm** = hợp lưu kỹ thuật (EMA 9/21/50, EMA200, VWAP, ADX, MACD+RSI 1h, nến đóng dứt khoát; trừ điểm volume cao trào, xu hướng 1h đã chạy lâu, coin đã chạy > 20%/24h) **+ dòng tiền** (OI tăng cùng giá +0.5, tiền rút −1, funding) **+ tin tức** (xem mục 1b): độ lệch tin của coin × 1.5 điểm × trọng số tin. Cần ≥ `MIN_SCORE` = 5 điểm và tỉ lệ lời/lỗ ≥ 1.5.
+**Bước 4 – Chấm điểm** = hợp lưu kỹ thuật (EMA 9/21/50, EMA200, VWAP, ADX, MACD+RSI 1h, nến đóng dứt khoát; trừ điểm volume cao trào, coin đã chạy > 20%/24h; v4.2 bỏ điểm trừ "xu hướng 1h đã chạy lâu" theo kiểm chứng 89 ngày – xem mục 13) **+ dòng tiền** (OI tăng cùng giá +0.5, tiền rút −1, funding) **+ tin tức** (xem mục 1b): độ lệch tin của coin × 1.5 điểm × trọng số tin. Cần ≥ `MIN_SCORE` = 5 điểm và tỉ lệ lời/lỗ ≥ 1.5.
 
 **Bước 5 – Luật chặn**: danh mục luật cố định (phiên giờ, BTC, OI, đám đông, funding, tin tức, Fear & Greed). Một số chặn sẵn, còn lại để bộ tự học bật/tắt theo kết quả thật. Tín hiệu bị chặn vẫn được theo dõi "bóng" để bộ tự học biết luật đó có đáng giữ không.
 
@@ -264,7 +264,7 @@ Danh sách repo tương tự (bot TA, bot tin tức không dùng LLM, tự tối
 ## 13. Kiểm chứng trên 90 ngày lịch sử (walk-forward)
 
 `tools/walkforward.py` chấm lại 40 coin × 89 ngày (08–11/2026) bằng đúng code của bot. Kết quả: [tools/wf_results/2026-11-05/BAO_CAO.md](tools/wf_results/2026-11-05/BAO_CAO.md).
-Tóm tắt: tối ưu tham số **không** thắng mặc định ngoài mẫu (−4,5R so với +1,6R trong 59 ngày); phần kỹ thuật ≈ hoà vốn; lớp bảo vệ khoá phía sau 3 lệnh thua/12h dương ở cả hai nửa thời gian (+10,6R so với +2,7R toàn kỳ); nhiều kết luận rút từ vài ngày (phiên 13–19h, xu hướng 1h đã chạy lâu) đảo dấu khi xét 89 ngày.
+Tóm tắt: tối ưu tham số **không** thắng mặc định ngoài mẫu (−4,5R so với +1,6R trong 59 ngày); phần kỹ thuật ≈ hoà vốn; nhiều kết luận rút từ vài ngày (phiên 13–19h, xu hướng 1h đã chạy lâu) đảo dấu khi xét 89 ngày → v4.2 bỏ điểm trừ "xu hướng 1h đã chạy lâu" (kỳ vọng mỗi tín hiệu tốt hơn ở cả hai nửa). Lớp bảo vệ: với điểm số v4.1 có lợi ở cả hai nửa, nhưng với điểm số v4.2 thì nửa sau chặn nhầm lệnh thắng – **chưa đủ bằng chứng**; mọi chênh lệch cấp danh mục (vài R) đều nằm trong biên nhiễu ±15–20R. Bot ghi bóng tín hiệu bị bảo vệ chặn, báo cáo ngày sẽ cho biết bảo vệ đang cứu hay làm mất lãi.
 
 ---
 

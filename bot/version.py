@@ -16,13 +16,17 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "4.1.0"
+VERSION = "4.2.0"
 RELEASED = "2026-11-05"
-RELEASE_BUILD = "e14df4f"          # ghi bởi `python -m bot.version --stamp`
+RELEASE_BUILD = "96d357e"          # ghi bởi `python -m bot.version --stamp`
 BUILD = RELEASED                   # tương thích các chỗ cũ dùng BUILD
 
 # Mới nhất ở trên: (phiên bản, ngày, các thay đổi – câu ngắn, đọc tốt trên điện thoại)
 NOTES = (
+    ("4.2.0", "2026-11-05", (
+        "Bỏ điểm trừ 'xu hướng 1h đã chạy lâu' (ADX 1h ≥ 35) của v3.2 – rút từ 5 ngày; kiểm chứng 89 ngày × 40 coin: kỳ vọng mỗi tín hiệu tốt hơn ở cả hai nửa (+0,15/−0,03R so với +0,07/−0,05R)",
+        "Luật late_trend vẫn trong danh mục để bộ tự học tự chặn khi nhóm này lỗ rõ; LATE_TREND_PENALTY=1 để trừ điểm lại như cũ",
+    )),
     ("4.1.0", "2026-11-05", (
         "Bộ tự học chỉnh được ngưỡng 10 cổng lọc (ADX, ATR, volume, cách EMA21, nhịp 1h, BTC, RSI, nến, SL): theo dõi bóng cả tín hiệu trượt đúng 1 cổng sát ngưỡng – trước đây tín hiệu bị loại ở cổng không được ghi",
         "Lớp bảo vệ kiểu freqtrade: khoá 1 phía 6h sau 3 lệnh thua/12h hoặc khi ≥80% tín hiệu cùng phía chạm SL trước khi lời 1R; coin vừa thua nghỉ 6h; bỏ coin niêm yết < 10 ngày",

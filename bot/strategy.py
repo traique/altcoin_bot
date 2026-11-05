@@ -401,9 +401,10 @@ def _score(df, htf, side, triggers, funding, change24h):
     # (31 tín hiệu bóng vol 1.5–2.5×: -0.68R, thắng 16%)
     if r.vol_ratio >= cfg.CLIMAX_VOL:
         s -= 1; why.append(f"Volume cao trào x{r.vol_ratio:.1f} (trừ điểm)")
-    # Xu hướng 1h đã chạy lâu (ADX 1h ≥ 35) → vào muộn, trừ điểm (76 short bóng: -0.44R)
-    if h.adx >= cfg.LATE_TREND_ADX:
-        s -= 1; why.append(f"ADX 1h {h.adx:.0f} – xu hướng đã chạy lâu (trừ điểm)")
+    # Xu hướng 1h đã chạy lâu (ADX 1h ≥ 35): v4.2 mặc định KHÔNG trừ điểm (89 ngày: đảo dấu theo giai đoạn) –
+    # luật late_trend để bộ tự học chặn khi cần; LATE_TREND_PENALTY > 0 để trừ như v3.2
+    if cfg.LATE_TREND_PENALTY and h.adx >= cfg.LATE_TREND_ADX:
+        s -= cfg.LATE_TREND_PENALTY; why.append(f"ADX 1h {h.adx:.0f} – xu hướng đã chạy lâu (trừ điểm)")
     # Nến đóng mạnh
     if (side == "long" and r.close_pos >= 0.7 and r.body_pct >= 0.5) or (side == "short" and r.close_pos <= 0.3 and r.body_pct >= 0.5):
         s += 0.5; why.append("Nến đóng dứt khoát")

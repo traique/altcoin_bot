@@ -144,8 +144,12 @@ class Config:
     # v3.2: volume nến tín hiệu ≥ 1.5× trung bình là cao trào (climax), không phải xác nhận: 31 tín hiệu bóng -0.68R,
     # thắng 16% (volume < 1.5×: -0.16R). Trừ điểm thay vì cộng, và luật climax_volume chặn sẵn.
     CLIMAX_VOL = _f("CLIMAX_VOL", 1.5)
-    # v3.2: ADX 1h ≥ 35 = xu hướng đã chạy lâu, vào lúc này là vào muộn: 76 short bóng -0.44R (ADX 1h < 35: -0.22R).
+    # ADX 1h ≥ 35 = "xu hướng đã chạy lâu". v3.2 trừ 1 điểm (76 short bóng của 5 ngày: -0.44R). v4.2 BỎ điểm trừ:
+    # kiểm chứng 89 ngày × 40 coin (tools/wf_results/2026-11-05) cho thấy nhóm này đảo dấu theo giai đoạn
+    # (08–09: +0.33R, t=4.3; 10–11: -0.20R, t=-2.7) và bỏ điểm trừ tốt hơn ở CẢ HAI nửa (danh mục +8.5R so với +2.7R).
+    # Luật late_trend vẫn trong danh mục → bộ tự học tự chặn khi nhóm này lỗ rõ. Đặt LATE_TREND_PENALTY=1 để trừ lại như v3.2.
     LATE_TREND_ADX = _f("LATE_TREND_ADX", 35)
+    LATE_TREND_PENALTY = _f("LATE_TREND_PENALTY", 0)
     WICK_CLOSE_POS = _f("WICK_CLOSE_POS", 0.6)         # long: nến tín hiệu đóng >= 60% biên độ (short: <= 40%)
     # Luật chặn sẵn từ đầu (bộ tự học vẫn theo dõi bóng và tự gỡ nếu thực tế có lãi)
     # v3.1: chặn thêm phiên 0h–7h (giờ VN): 14 tín hiệu bóng chỉ thắng 1, kỳ vọng -0.89R. Bộ tự học sẽ gỡ nếu bóng có lãi.

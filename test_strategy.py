@@ -56,8 +56,13 @@ s_cl, why_cl = S._score(NS(row=lambda i: r_cl), hf, "long", ["MACD cắt lên"],
 assert s_cl == s_one - 1 and any("cao trào" in w for w in why_cl), (s_cl, s_one)
 h_late = NS(**{**vars(h), "adx": cfg.LATE_TREND_ADX})
 s_late, why_late = S._score(fr, NS(row=lambda i: h_late), "long", ["MACD cắt lên"], 0, 0)
+assert cfg.LATE_TREND_PENALTY == 0 and s_late == s_one and not any("chạy lâu" in w for w in why_late)   # v4.2: bỏ điểm trừ
+cfg.LATE_TREND_PENALTY = 1                                               # bật lại như v3.2
+s_late, why_late = S._score(fr, NS(row=lambda i: h_late), "long", ["MACD cắt lên"], 0, 0)
 assert s_late == s_one - 1 and any("chạy lâu" in w for w in why_late), (s_late, s_one)
-print("✓ v3.2: volume cao trào -1, ADX 1h ≥ 35 -1")
+cfg.LATE_TREND_PENALTY = 0
+assert "late_trend" in S.RULES and "late_trend" not in S.active_blocks()   # vẫn là luật bộ tự học chặn được
+print("✓ volume cao trào -1; v4.2: ADX 1h ≥ 35 không còn bị trừ điểm (LATE_TREND_PENALTY=1 để bật lại), luật late_trend vẫn học được")
 
 # 4c) v3.2: cổng "ngược nhịp 1h của coin"
 assert "ngược nhịp 1h" in S._gates(row(), "long", 1, None, chg1h=-cfg.CHASE_1H_PCT)
