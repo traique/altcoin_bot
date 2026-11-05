@@ -13,6 +13,7 @@ SRC=$(cd "${1:?cần thư mục gói, ví dụ dist/botkeep}" && pwd)
 REMOTE=${2:-origin}
 BRANCH=${3:-botkeep}
 SHA=$(git rev-parse --short HEAD)
+FROM=$(git rev-parse --abbrev-ref HEAD)              # "main" khi GitHub Actions chạy; tên nhánh khi chạy tay
 [ -f "$SRC/run.py" ] || { echo "Không thấy $SRC/run.py: chưa tạo gói?" >&2; exit 1; }
 
 WT=$(mktemp -d)
@@ -58,6 +59,7 @@ print(f"Altcoin {b['version']} ({b['build']}); {d['files']} file, {d['dirs']} th
 PY
 )
 fi
-git -C "$WT" commit -q -m "Gói Botkeep từ main $SHA" ${INFO:+-m "$INFO"}
+# BOTKEEP_COMMIT_NOTE (tuỳ chọn): đoạn thêm vào cuối thông điệp commit, vd ghi chú người/nguồn chạy tay
+git -C "$WT" commit -q -m "Gói Botkeep từ $FROM $SHA" ${INFO:+-m "$INFO"} ${BOTKEEP_COMMIT_NOTE:+-m "$BOTKEEP_COMMIT_NOTE"}
 git -C "$WT" push -q "$REMOTE" "HEAD:refs/heads/$BRANCH"
-echo "Đã cập nhật nhánh $BRANCH: gói của $SHA${INFO:+ – $INFO}"
+echo "Đã cập nhật nhánh $BRANCH: gói của $FROM $SHA${INFO:+ – $INFO}"
