@@ -60,7 +60,7 @@ msgs = []
 b = M.Bot.__new__(M.Bot)
 b.__dict__.update(started_at=time.time(), booting=False, store=st, switches=Switches(st), okx=FakeOKX(), is_leader=True,
                   instance="test", last_prices={}, learner=None, shadow_seen={}, last_btc={}, last_market={},
-                  paused=False, last_scan=0, last_scan_summary=None, cooldown={}, _news_exit_done=set(),
+                  paused=False, last_scan=0, last_scan_summary=None, cooldown={}, _news_exit_done=set(), _news_exit_retry={},
                   start_equity=10.0, notify=NS(send=msgs.append), tg=NS(enabled=False), zoom=None)
 b.news = NewsHub(st)
 b.news.set_universe(b.okx.crypto_bases())
@@ -102,8 +102,20 @@ time.sleep(0.01)
 b.news.ingest([{"src": "The Block", "kind": "news", "title": "AAA exploit: attackers drain $12M from bridge", "url": "a3",
                 "ts": time.time()}])
 b.okx.prices_["AAA/USDT:USDT"] = 9.95
+# 2a) lấy giá lỗi lúc đóng → lệnh VẪN MỞ, không đánh dấu đã xử lý; thử lại sau NEWS_EXIT_RETRY_S, không bỏ qua mãi
+def _timeout(s):
+    raise TimeoutError("OKX timeout")
+b.okx.price = _timeout
+b._news_guard()
+assert len(st.open_trades()) == 1 and not b._news_exit_done, "đóng lỗi thì lệnh phải còn mở để thử lại"
+assert not any(m.startswith("📰 Đã đóng") for m in msgs)
+del b.okx.price                                      # bỏ hàm lỗi → dùng lại price() của FakeOKX
+b._news_guard()                                      # chưa hết thời gian chờ → chưa thử lại
+assert len(st.open_trades()) == 1
+b._news_exit_retry = {k: 0 for k in b._news_exit_retry}  # hết thời gian chờ
 b._news_guard()
 assert st.open_trades() == [], "lệnh phải được đóng vì tin hack mới"
+assert not b._news_exit_retry and len(b._news_exit_done) == 1
 closed = [x for x in st.trades(5) if x["status"] == "closed"][0]
 assert closed["reason_close"].startswith("Tin xấu: hack"), closed["reason_close"]
 rev = st.reviews(1)[0]

@@ -69,29 +69,59 @@ def fetch_series(ex, sym, tf, since_ms, until_ms):
     return sorted(clean)
 
 
+def _write_meta(data, meta):
+    with open(os.path.join(data, "meta.json"), "w") as fh:
+        json.dump(meta, fh, indent=1)
+
+
+def read_meta(data):
+    """meta.json của thư mục dữ liệu; dừng nếu lần tải chưa xong (file nến chưa đủ cho cửa sổ ghi trong meta)."""
+    with open(os.path.join(data, "meta.json")) as fh:
+        meta = json.load(fh)
+    if not meta.get("complete", True):
+        sys.exit(f"{data}: lần tải nến chưa xong – chạy lại `fetch --data {data}` để tải bù rồi mới chạy tiếp")
+    return meta
+
+
 def cmd_fetch(a):
     from bot.exchange import OKX
     os.makedirs(a.data, exist_ok=True)
     okx = OKX()
-    coins = [s for s, _, _ in okx.top_altcoins(a.coins)]          # đúng bộ lọc của bot: crypto thật, bỏ BTC/ETH/stable
-    syms = ["BTC/USDT:USDT"] + coins
-    until = int(time.time() // 3600 * 3600 * 1000)                 # tròn giờ → mọi khung cùng mốc kết thúc
-    since = until - a.days * 86_400_000
-    meta = {"since": since, "until": until, "days": a.days, "coins": coins, "fetched": time.time()}
+    old = None
+    if os.path.exists(os.path.join(a.data, "meta.json")) and not a.force:
+        with open(os.path.join(a.data, "meta.json")) as fh:
+            old = json.load(fh)
+    if old:
+        # Thư mục đã có dữ liệu: giữ ĐÚNG cửa sổ + danh sách coin đã tải để mọi file khớp meta.json, chỉ tải bù file
+        # còn thiếu (vd lần trước bị ngắt). Muốn cửa sổ khác (đổi --days, cập nhật tới hôm nay) → --force hoặc --data khác.
+        meta = dict(old, fetched=time.time(), complete=False)
+        if old.get("days") != a.days:
+            print(f"⚠ {a.data} đang có dữ liệu {old.get('days')} ngày (tới "
+                  f"{time.strftime('%Y-%m-%d %H:%M', time.gmtime(old['until'] / 1000))} UTC) – giữ nguyên cửa sổ đó, chỉ "
+                  f"tải bù file thiếu. Muốn {a.days} ngày mới: thêm --force", flush=True)
+    else:
+        coins = [s for s, _, _ in okx.top_altcoins(a.coins)]      # đúng bộ lọc của bot: crypto thật, bỏ BTC/ETH/stable
+        until = int(time.time() // 3600 * 3600 * 1000)             # tròn giờ → mọi khung cùng mốc kết thúc
+        meta = {"since": until - a.days * 86_400_000, "until": until, "days": a.days, "coins": coins,
+                "fetched": time.time(), "complete": False}
+    since, until = meta["since"], meta["until"]
+    syms = ["BTC/USDT:USDT"] + meta["coins"]
+    _write_meta(a.data, meta)       # ghi cửa sổ TRƯỚC khi tải: bị ngắt giữa chừng thì lần sau tải bù đúng cửa sổ này
     t0 = time.time()
     for i, s in enumerate(syms):
         for tf in ("1h", "15m", "5m"):
             p = _path(a.data, s, tf)
-            if os.path.exists(p) and not a.force:
+            if old and os.path.exists(p):           # file đã tải cho đúng cửa sổ trong meta → dùng lại
                 continue
             # nến 1h cần thêm 10 ngày đầu để chỉ báo khung lớn "ấm máy" (EMA50, ADX)
             rows = fetch_series(okx.ex, s, tf, since - (10 * 86_400_000 if tf == "1h" else 2 * 86_400_000), until)
-            with gzip.open(p, "wt") as fh:
+            with gzip.open(p + ".tmp", "wt") as fh:         # ghi file tạm rồi đổi tên: bị ngắt không để lại file dở
                 json.dump(rows, fh)
+            os.replace(p + ".tmp", p)
         print(f"[{i + 1}/{len(syms)}] {s} xong – {time.time() - t0:.0f}s", flush=True)
-    with open(os.path.join(a.data, "meta.json"), "w") as fh:
-        json.dump(meta, fh, indent=1)
-    print("Tải xong:", len(syms), "mã,", a.days, "ngày")
+    meta["complete"] = True
+    _write_meta(a.data, meta)
+    print("Tải xong:", len(syms), "mã,", meta["days"], "ngày")
 
 
 # ============================================================ 2. tín hiệu ứng viên (dùng đúng code của bot)
@@ -238,7 +268,7 @@ def _coin_events(job):
 
 def cmd_events(a):
     from multiprocessing import Pool
-    meta = json.load(open(os.path.join(a.data, "meta.json")))
+    meta = read_meta(a.data)
     btc = _btc_context(a.data)
     jobs = [(a.data, s, meta["since"], meta["until"], btc) for s in meta["coins"]]
     t0 = time.time()
@@ -416,8 +446,10 @@ class Book:
 
 
 def pstats(trades, days):
+    """Thống kê danh mục. Sụt vốn / chuỗi thua tính theo THỨ TỰ ĐÓNG lệnh (ts ra): 2 lệnh mở song song có thể đóng
+    khác thứ tự vào, nên cộng R theo thứ tự vào lệnh sẽ cho sụt vốn sai."""
     eq, peak, dd, streak, worst = 0.0, 0.0, 0.0, 0, 0
-    for tr in trades:
+    for tr in sorted(trades, key=lambda tr: (tr[5], tr[0])):
         eq += tr[4]
         peak = max(peak, eq)
         dd = min(dd, eq - peak)
@@ -438,7 +470,7 @@ def objective(s, min_n):
 def cmd_optimize(a):
     import csv
     import random
-    meta = json.load(open(os.path.join(a.data, "meta.json")))
+    meta = read_meta(a.data)
     with gzip.open(os.path.join(a.data, "events.json.gz"), "rt") as fh:
         events = json.load(fh)
     os.makedirs(a.out, exist_ok=True)

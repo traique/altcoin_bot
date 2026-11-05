@@ -53,6 +53,8 @@ def _ago(ts):
 
 
 class Bot:
+    NEWS_EXIT_RETRY_S = 120     # đóng lệnh theo tin xấu bị lỗi → thử lại sau chừng này giây
+
     def __init__(self):
         self.started_at = time.time()
         self.booting = True
@@ -87,6 +89,7 @@ class Bot:
         self.last_scan_summary = self.store.get("last_scan")
         self.cooldown = {}   # symbol -> time cho phép vào lại
         self._news_exit_done = set()
+        self._news_exit_retry = {}   # "id:sự kiện" -> lúc được thử đóng lại (lần đóng trước lỗi)
         self.start_equity = self.store.get("start_equity")
         if self.start_equity is None:
             self.start_equity = self.engine.equity()
@@ -445,25 +448,30 @@ class Bot:
 
     def _news_guard(self):
         """Lệnh đang mở gặp tin xấu MỚI (đăng sau lúc vào lệnh): long – huỷ niêm yết / hack; short – niêm yết sàn lớn
-        → đóng ngay (NEWS_EXIT_EVENTS). Mỗi lệnh × sự kiện chỉ xử lý 1 lần."""
+        → đóng ngay (NEWS_EXIT_EVENTS). Mỗi lệnh × sự kiện chỉ xử lý 1 lần, và chỉ ghi "đã xử lý" khi đóng XONG:
+        lấy giá lỗi / sàn từ chối lệnh đóng → lệnh vẫn mở, thử lại sau NEWS_EXIT_RETRY_S giây."""
         if not cfg.NEWS_EXIT_EVENTS or not self.news or not self.news.enabled:
             return
+        now = time.time()
         for t in self.store.open_trades():
             bad = self.news.adverse_events(t["symbol"].split("/")[0], t["side"], float(t["opened_at"]), cfg.NEWS_EXIT_EVENTS)
             if not bad:
                 continue
             ev, _, title = bad[0]
-            key = f"{t['id']}:{ev}"
-            if key in self._news_exit_done:
+            key, name = f"{t['id']}:{ev}", EVENT_NAMES.get(ev, ev)
+            if key in self._news_exit_done or now < self._news_exit_retry.get(key, 0):
                 continue
-            self._news_exit_done.add(key)
             try:
                 price = self.okx.price(t["symbol"])
-                log.warning("%s %s: tin %s mới – đóng lệnh. %s", t["side"].upper(), t["symbol"], EVENT_NAMES.get(ev, ev), title)
-                self.engine.close(t, price, f"Tin xấu: {EVENT_NAMES.get(ev, ev)}")
-                self.notify.send(f"📰 Đã đóng {t['side'].upper()} {t['symbol']} vì tin {EVENT_NAMES.get(ev, ev)}:\n{title}")
+                log.warning("%s %s: tin %s mới – đóng lệnh. %s", t["side"].upper(), t["symbol"], name, title)
+                self.engine.close(t, price, f"Tin xấu: {name}")
             except Exception as e:
-                log.error("Đóng lệnh theo tin %s lỗi: %s", t["symbol"], e)
+                self._news_exit_retry[key] = now + self.NEWS_EXIT_RETRY_S
+                log.error("Đóng lệnh %s theo tin %s lỗi – thử lại sau %ds: %s", t["symbol"], name, self.NEWS_EXIT_RETRY_S, e)
+                continue
+            self._news_exit_done.add(key)
+            self._news_exit_retry.pop(key, None)
+            self.notify.send(f"📰 Đã đóng {t['side'].upper()} {t['symbol']} vì tin {name}:\n{title}")
 
     def learn_text(self):
         st = self.learner.public_state()

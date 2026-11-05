@@ -50,12 +50,12 @@
  },
  "oos_walkforward_portfolio": {
   "trades": 237,
-  "sum_r": 19.3,
+  "sum_r": 19.29,
   "exp_r": 0.081,
   "winrate": 35.4,
   "max_dd_r": -22.16,
   "r_per_day": 0.327,
-  "worst_streak": 13
+  "worst_streak": 11
  },
  "hindsight_portfolio_same_period": {
   "trades": 246,
@@ -64,7 +64,7 @@
   "winrate": 28.9,
   "max_dd_r": -34.63,
   "r_per_day": -0.417,
-  "worst_streak": 24
+  "worst_streak": 26
  },
  "default_signals_full": {
   "n": 912,
@@ -137,9 +137,9 @@
    "sum_r": 8.31,
    "exp_r": 0.024,
    "winrate": 56.2,
-   "max_dd_r": -16.48,
+   "max_dd_r": -17.61,
    "r_per_day": 0.093,
-   "worst_streak": 7,
+   "worst_streak": 8,
    "bi_chan_n": 54,
    "bi_chan_ky_vong_R": 0.136,
    "bi_chan_tong_R": 7.35
@@ -151,9 +151,9 @@
    "sum_r": -1.79,
    "exp_r": -0.008,
    "winrate": 55.9,
-   "max_dd_r": -16.47,
+   "max_dd_r": -17.61,
    "r_per_day": -0.03,
-   "worst_streak": 7,
+   "worst_streak": 8,
    "bi_chan_n": 36,
    "bi_chan_ky_vong_R": 0.174,
    "bi_chan_tong_R": 6.27
@@ -193,7 +193,7 @@
    "sum_r": 9.04,
    "exp_r": 0.026,
    "winrate": 56.1,
-   "max_dd_r": -15.68,
+   "max_dd_r": -16.77,
    "r_per_day": 0.102,
    "worst_streak": 7,
    "bi_chan_n": 49,
@@ -207,7 +207,7 @@
    "sum_r": -1.06,
    "exp_r": -0.004,
    "winrate": 55.8,
-   "max_dd_r": -15.68,
+   "max_dd_r": -16.77,
    "r_per_day": -0.018,
    "worst_streak": 7,
    "bi_chan_n": 31,
@@ -249,9 +249,9 @@
    "sum_r": 6.19,
    "exp_r": 0.018,
    "winrate": 55.9,
-   "max_dd_r": -16.47,
+   "max_dd_r": -17.61,
    "r_per_day": 0.07,
-   "worst_streak": 7,
+   "worst_streak": 8,
    "bi_chan_n": 54,
    "bi_chan_ky_vong_R": 0.132,
    "bi_chan_tong_R": 7.13
@@ -263,9 +263,9 @@
    "sum_r": -3.91,
    "exp_r": -0.016,
    "winrate": 55.5,
-   "max_dd_r": -16.48,
+   "max_dd_r": -17.61,
    "r_per_day": -0.066,
-   "worst_streak": 7,
+   "worst_streak": 8,
    "bi_chan_n": 36,
    "bi_chan_ky_vong_R": 0.168,
    "bi_chan_tong_R": 6.05
@@ -277,9 +277,9 @@
    "sum_r": 6.04,
    "exp_r": 0.017,
    "winrate": 55.9,
-   "max_dd_r": -16.52,
+   "max_dd_r": -17.61,
    "r_per_day": 0.068,
-   "worst_streak": 7,
+   "worst_streak": 8,
    "bi_chan_n": 52,
    "bi_chan_ky_vong_R": 0.185,
    "bi_chan_tong_R": 9.62
@@ -291,9 +291,9 @@
    "sum_r": -4.06,
    "exp_r": -0.017,
    "winrate": 55.5,
-   "max_dd_r": -16.52,
+   "max_dd_r": -17.61,
    "r_per_day": -0.069,
-   "worst_streak": 7,
+   "worst_streak": 8,
    "bi_chan_n": 34,
    "bi_chan_ky_vong_R": 0.251,
    "bi_chan_tong_R": 8.54
@@ -305,7 +305,7 @@
    "sum_r": 0.18,
    "exp_r": 0.001,
    "winrate": 54.2,
-   "max_dd_r": -15.65,
+   "max_dd_r": -15.26,
    "r_per_day": 0.002,
    "worst_streak": 7,
    "bi_chan_n": 89,

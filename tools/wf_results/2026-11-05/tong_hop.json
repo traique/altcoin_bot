@@ -55,7 +55,7 @@
   "winrate": 35.0,
   "max_dd_r": -26.46,
   "r_per_day": -0.075,
-  "worst_streak": 9
+  "worst_streak": 8
  },
  "hindsight_portfolio_same_period": {
   "trades": 232,
@@ -64,7 +64,7 @@
   "winrate": 28.9,
   "max_dd_r": -38.1,
   "r_per_day": -0.43,
-  "worst_streak": 14
+  "worst_streak": 16
  },
  "default_signals_full": {
   "n": 736,
@@ -137,7 +137,7 @@
    "sum_r": 10.62,
    "exp_r": 0.032,
    "winrate": 57.6,
-   "max_dd_r": -12.66,
+   "max_dd_r": -13.24,
    "r_per_day": 0.119,
    "worst_streak": 6,
    "bi_chan_n": 37,
@@ -193,7 +193,7 @@
    "sum_r": 13.57,
    "exp_r": 0.041,
    "winrate": 57.9,
-   "max_dd_r": -12.66,
+   "max_dd_r": -13.24,
    "r_per_day": 0.153,
    "worst_streak": 6,
    "bi_chan_n": 33,
@@ -221,7 +221,7 @@
    "sum_r": 0.81,
    "exp_r": 0.002,
    "winrate": 56.4,
-   "max_dd_r": -12.66,
+   "max_dd_r": -13.24,
    "r_per_day": 0.009,
    "worst_streak": 6,
    "bi_chan_n": 8,
@@ -249,7 +249,7 @@
    "sum_r": 10.62,
    "exp_r": 0.032,
    "winrate": 57.6,
-   "max_dd_r": -12.66,
+   "max_dd_r": -13.24,
    "r_per_day": 0.119,
    "worst_streak": 6,
    "bi_chan_n": 37,
@@ -277,7 +277,7 @@
    "sum_r": 10.62,
    "exp_r": 0.032,
    "winrate": 57.6,
-   "max_dd_r": -12.66,
+   "max_dd_r": -13.24,
    "r_per_day": 0.119,
    "worst_streak": 6,
    "bi_chan_n": 37,
@@ -305,7 +305,7 @@
    "sum_r": 1.89,
    "exp_r": 0.006,
    "winrate": 55.6,
-   "max_dd_r": -14.38,
+   "max_dd_r": -14.81,
    "r_per_day": 0.021,
    "worst_streak": 6,
    "bi_chan_n": 58,

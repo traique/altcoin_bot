@@ -16,13 +16,17 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = "4.2.1"
+VERSION = "4.2.2"
 RELEASED = "2026-11-05"
-RELEASE_BUILD = "7a3e36b"          # ghi bởi `python -m bot.version --stamp`
+RELEASE_BUILD = "b0bcfb6"          # ghi bởi `python -m bot.version --stamp`
 BUILD = RELEASED                   # tương thích các chỗ cũ dùng BUILD
 
 # Mới nhất ở trên: (phiên bản, ngày, các thay đổi – câu ngắn, đọc tốt trên điện thoại)
 NOTES = (
+    ("4.2.2", "2026-11-05", (
+        "Chạy thật: lệnh đóng trên sàn bị lỗi thì KHÔNG ghi là đã đóng nữa – lệnh vẫn được theo dõi và lượt sau thử đóng lại (bản cũ ghi đóng dù vị thế còn trên sàn)",
+        "Đóng lệnh vì tin xấu bị lỗi (mất giá, sàn từ chối) → thử lại sau 2 phút thay vì bỏ qua luôn",
+    )),
     ("4.2.1", "2026-11-05", (
         "Deploy thẳng từ GitHub như repo Stockvn: GitHub Actions chạy test, tạo gói rồi đẩy lên nhánh 'botkeep' – Botkeep trỏ vào nhánh này",
         "RESET_DATA=<mã>: xoá toàn bộ dữ liệu một lần khi khởi động để bắt đầu lại từ đầu (không xoá khi chạy thật còn lệnh mở)",

@@ -326,10 +326,14 @@ class LiveEngine(BaseEngine):
         return pnl
 
     def close(self, t, price, reason):
+        """Đóng trên sàn TRƯỚC, xong mới ghi DB. Lệnh đóng lỗi → báo lỗi lên trên, KHÔNG ghi đóng: lệnh vẫn được theo
+        dõi và lượt sau thử lại; nếu thật ra sàn vừa khớp SL/TP thì monitor() ghi đóng theo giá khớp thật.
+        (Bản cũ vẫn ghi đóng khi lệnh đóng lỗi → vị thế còn mở trên sàn nhưng bot thôi theo dõi.)"""
         try:
             self.okx.close_position(t["symbol"], t["side"], t["contracts"])
         except Exception as e:
-            log.error("close_position %s: %s", t["symbol"], e)
+            log.error("close_position %s: %s – giữ lệnh, thử lại lượt sau", t["symbol"], e)
+            raise
         self._finalize(t, price, reason)
 
     def monitor(self):
@@ -374,8 +378,11 @@ class LiveEngine(BaseEngine):
                     upd["sl"] = p
                     need_algo = True
                 elif kind in ("STALL", "TIMEOUT"):
-                    self.close(t, price, self._reason(kind, t))
-                    closed = True
+                    try:
+                        self.close(t, price, self._reason(kind, t))
+                        closed = True
+                    except Exception:
+                        pass                    # close() đã ghi log; lệnh vẫn mở → lượt sau thử đóng lại
                     break
                 # SL/TP thật do sàn khớp – xử lý ở nhánh "không còn vị thế" lần sau
             if closed:

@@ -37,11 +37,13 @@ Bộ được chọn nhảy lung tung giữa các lượt (ADX 26 → 16 → 18,
 | Biến thể | Toàn kỳ (89 ngày) | Ngoài mẫu (từ ngày 30) | Tín hiệu bị chặn, nếu vào thì sẽ có |
 |---|---|---|---|
 | Không bảo vệ | +2,7R, 347 lệnh, sụt tối đa −13,7R | +2,7R | – |
-| **Đủ lớp bảo vệ v4.1** | **+10,6R**, 328 lệnh, sụt −12,7R | **+7,9R** | 37 tín hiệu, **−0,34R** (ngoài mẫu −0,58R) |
+| **Đủ lớp bảo vệ v4.1** | **+10,6R**, 328 lệnh, sụt −13,2R | **+7,9R** | 37 tín hiệu, **−0,34R** (ngoài mẫu −0,58R) |
 | Chỉ khoá phía theo lệnh thua (≥ 3 lệnh/12h) | +13,6R | +10,9R | 33 tín hiệu, −0,42R |
 | Chỉ khoá phía theo tín hiệu bóng (≥ 80%, ≥ 10 coin) | +2,7R (chưa kích hoạt lần nào) | +2,7R | 0 |
 | Chỉ khoá coin vừa thua | +0,8R | +0,8R | 8 tín hiệu, +0,07R (quá ít để kết luận) |
 | Khoá phía 12h thay vì 6h | +1,9R | +5,0R | 58 tín hiệu, −0,14R |
+
+*Sụt vốn tối đa và chuỗi thua dài nhất tính theo thứ tự **đóng** lệnh. Bản đầu của báo cáo cộng R theo thứ tự vào lệnh nên ghi −12,7R cho dòng "đủ lớp bảo vệ". Các file `tong_hop.json` và `lop_bao_ve.csv` (cả trong `sau_khi_bo_diem_tru/`) đã được tính lại trên đúng dữ liệu cũ: chỉ hai cột này đổi, mọi số khác giữ nguyên.*
 
 Độ nhạy theo hai nửa thời gian (danh mục; khi không bảo vệ: nửa đầu −0,8R, nửa sau +3,5R):
 - **≥ 3 lệnh thua / 12h (mặc định): nửa đầu +6,3R, nửa sau +7,3R.** Đây là thiết lập duy nhất dương ở cả hai nửa.
